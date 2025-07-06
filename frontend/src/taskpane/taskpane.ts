@@ -7,6 +7,8 @@
 
 import { ExcelOperations } from '../scriptlab';
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
+import { spreadlyAPI } from '../services/api';
+import { getSelectedRangeData, getWorksheetData, getWorksheetInfo } from '../services/excel-data';
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -127,9 +129,61 @@ function initializeChat() {
 async function processUserMessage(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
-  // Simple pattern matching for demo purposes
-  // In a real implementation, this would be replaced with AI/LLM integration
+  // Check if backend is available
+  const backendAvailable = await spreadlyAPI.healthCheck();
   
+  if (!backendAvailable) {
+    return await processOfflineMessage(message);
+  }
+  
+  // AI-powered processing with backend
+  try {
+    // Handle special commands first
+    if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis') || lowerMessage.includes('insights')) {
+      return await handleAnalysisRequest();
+    }
+    
+    if (lowerMessage.includes('upload') || lowerMessage.includes('process') || lowerMessage.includes('send data')) {
+      return await handleDataUpload();
+    }
+    
+    if (lowerMessage.includes('formula') || lowerMessage.includes('generate formula')) {
+      return await handleFormulaGeneration(message);
+    }
+    
+    // For general queries, try to get context from current spreadsheet
+    const hasSessionToken = spreadlyAPI.getSessionToken();
+    
+    if (hasSessionToken) {
+      // Send query to AI with existing session context
+      const response = await spreadlyAPI.sendQuery(message);
+      
+      let responseMessage = response.result.answer || "I processed your request.";
+      let code: string | undefined;
+      
+      // If AI suggests a formula, extract it
+      if (response.result.formula) {
+        responseMessage += `\n\nSuggested formula: ${response.result.formula}`;
+        code = `DIRECT_INSERT_FORMULA:${response.result.formula}`;
+      }
+      
+      return { message: responseMessage, code };
+    } else {
+      // No session yet, suggest uploading data first
+      return {
+        message: `I'd love to help with: "${message}"\n\nTo provide the best assistance, I need to analyze your spreadsheet data first. Would you like me to:\n\n• "upload data" - to analyze your current spreadsheet\n• "analyze" - to get AI insights\n• "generate formula [description]" - to create Excel formulas\n\nOr I can help with basic operations without AI analysis.`
+      };
+    }
+  } catch (error) {
+    console.error('AI processing error:', error);
+    return await processOfflineMessage(message);
+  }
+}
+
+async function processOfflineMessage(message: string): Promise<{ message: string; code?: string }> {
+  const lowerMessage = message.toLowerCase();
+  
+  // Fallback to simple pattern matching when backend is unavailable
   if (lowerMessage.includes('highlight') || lowerMessage.includes('color')) {
     const color = extractColor(message) || 'yellow';
     return {
@@ -139,7 +193,6 @@ async function processUserMessage(message: string, _engine: SimpleScriptLabEngin
   }
   
   if (lowerMessage.includes('insert') && lowerMessage.includes('data')) {
-    // Example: "insert data: [[1,2,3],[4,5,6]]"
     const dataMatch = message.match(/\[\[.*?\]\]/);
     if (dataMatch) {
       try {
@@ -173,7 +226,6 @@ async function processUserMessage(message: string, _engine: SimpleScriptLabEngin
     };
   }
   
-  // Test code execution - direct Excel API call without iframe
   if (lowerMessage.includes('test') || lowerMessage.includes('demo')) {
     return {
       message: "I'll run a simple test directly with Excel API (no iframe).",
@@ -181,18 +233,128 @@ async function processUserMessage(message: string, _engine: SimpleScriptLabEngin
     };
   }
   
-  // Default response for unrecognized commands
   return {
-    message: `I understand you said: "${message}". I can help you with:
+    message: `Backend AI is currently unavailable. I can still help with basic operations:
     
-• "highlight cells" - to highlight selected cells
-• "insert data [[1,2],[3,4]]" - to insert data
+• "highlight cells [color]" - to highlight selected cells
+• "insert data [[1,2],[3,4]]" - to insert data  
 • "create chart A1:C5" - to create charts
 • "format cells A1:B2" - to format cells
 • "test" - to run a demo
 
-What would you like to do with your spreadsheet?`
+For AI-powered analysis, please ensure the backend is running at http://localhost:8000`
   };
+}
+
+async function handleAnalysisRequest(): Promise<{ message: string; code?: string }> {
+  try {
+    // First upload current data if no session exists
+    if (!spreadlyAPI.getSessionToken()) {
+      const uploadResult = await handleDataUpload();
+      if (uploadResult.message.includes('Error')) {
+        return uploadResult;
+      }
+    }
+    
+    // Get AI analysis
+    const analysis = await spreadlyAPI.getAnalysis();
+    
+    let message = "🤖 **AI Analysis Results:**\n\n";
+    
+    if (analysis.analysis.insights) {
+      message += "**Key Insights:**\n";
+      analysis.analysis.insights.forEach((insight: string, index: number) => {
+        message += `${index + 1}. ${insight}\n`;
+      });
+      message += "\n";
+    }
+    
+    if (analysis.analysis.suggestions) {
+      message += "**Suggestions:**\n";
+      analysis.analysis.suggestions.forEach((suggestion: string, index: number) => {
+        message += `${index + 1}. ${suggestion}\n`;
+      });
+      message += "\n";
+    }
+    
+    if (analysis.analysis.formulas) {
+      message += "**Recommended Formulas:**\n";
+      analysis.analysis.formulas.forEach((formula: any, index: number) => {
+        message += `${index + 1}. ${formula.formula} - ${formula.description}\n`;
+      });
+    }
+    
+    return { message };
+  } catch (error) {
+    return { message: `❌ Error getting analysis: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+async function handleDataUpload(): Promise<{ message: string; code?: string }> {
+  try {
+    // Get current worksheet data
+    const worksheetData = await getWorksheetData();
+    const worksheetInfo = await getWorksheetInfo();
+    
+    if (worksheetData.data.length === 0) {
+      return { message: "❌ No data found in the current worksheet. Please add some data first." };
+    }
+    
+    // Upload to backend
+    const result = await spreadlyAPI.uploadExcelData(
+      worksheetData.data, 
+      `${worksheetInfo.activeSheet.name}.xlsx`
+    );
+    
+    return { 
+      message: `✅ Data uploaded successfully!\n\n📊 **Data Summary:**\n• Range: ${worksheetData.range}\n• Rows: ${worksheetData.rowCount}\n• Columns: ${worksheetData.columnCount}\n• Session ID: ${result.session_token.substring(0, 8)}...\n\nYou can now ask me to "analyze" the data or ask questions about your spreadsheet!` 
+    };
+  } catch (error) {
+    return { message: `❌ Error uploading data: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+async function handleFormulaGeneration(message: string): Promise<{ message: string; code?: string }> {
+  try {
+    // Extract the formula description from the message
+    const description = message.replace(/generate formula|formula|create formula/gi, '').trim();
+    
+    if (!description) {
+      return { message: "Please specify what kind of formula you need. For example: 'generate formula to calculate percentage growth'" };
+    }
+    
+    // Get current worksheet context for better formula generation
+    let context = "";
+    try {
+      const worksheetData = await getWorksheetData();
+      context = `Worksheet has ${worksheetData.rowCount} rows and ${worksheetData.columnCount} columns. Data types: ${worksheetData.dataTypes.join(', ')}.`;
+    } catch (e) {
+      // Continue without context if worksheet data can't be read
+    }
+    
+    const response = await spreadlyAPI.generateFormulas(description, context);
+    
+    let message = `🧮 **Generated Formulas for:** "${description}"\n\n`;
+    
+    response.formulas.forEach((formula, index) => {
+      message += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
+      message += `Formula: \`${formula.formula}\`\n`;
+      message += `Description: ${formula.description}\n`;
+      if (formula.example) {
+        message += `Example: ${formula.example}\n`;
+      }
+      message += "\n";
+    });
+    
+    // Return the first formula as executable code
+    const firstFormula = response.formulas[0];
+    return { 
+      message, 
+      code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
+    };
+  } catch (error) {
+    return { message: `❌ Error generating formulas: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
 }
 
 async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
@@ -249,6 +411,11 @@ async function executeDirectOperation(code: string): Promise<string> {
     if (code.startsWith("DIRECT_FORMAT:")) {
       const range = code.split(":")[1];
       return await executeFormatCells(range);
+    }
+    
+    if (code.startsWith("DIRECT_INSERT_FORMULA:")) {
+      const formula = code.substring("DIRECT_INSERT_FORMULA:".length);
+      return await executeInsertFormula(formula);
     }
     
     return "❌ Unknown direct operation";
@@ -314,6 +481,28 @@ async function executeFormatCells(range: string): Promise<string> {
     return `✅ Range ${range} formatted with blue background and bold text!`;
   } catch (error) {
     return `❌ Failed to format cells: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+async function executeInsertFormula(formula: string): Promise<string> {
+  try {
+    await Excel.run(async (context) => {
+      const range = context.workbook.getSelectedRange();
+      range.load("address");
+      
+      // Ensure formula starts with =
+      const cleanFormula = formula.startsWith('=') ? formula : `=${formula}`;
+      
+      // Insert formula into the selected cell(s)
+      range.formulas = [[cleanFormula]];
+      
+      await context.sync();
+      return range.address;
+    });
+    
+    return `✅ Formula inserted successfully: ${formula}`;
+  } catch (error) {
+    return `❌ Failed to insert formula: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
 }
 
