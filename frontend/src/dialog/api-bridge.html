@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>API Bridge</title>
+    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+    <div id="status">Connecting to backend...</div>
+    
+    <script>
+        Office.onReady(() => {
+            // Get request data from URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const apiCall = urlParams.get('call');
+            const data = urlParams.get('data');
+            
+            makeApiCall(apiCall, data);
+        });
+        
+        async function makeApiCall(callType, requestData) {
+            const baseUrl = 'http://127.0.0.1:8000';
+            
+            try {
+                document.getElementById('status').textContent = `Making ${callType} request...`;
+                
+                let response;
+                
+                switch (callType) {
+                    case 'health':
+                        response = await fetch(`${baseUrl}/health`);
+                        break;
+                        
+                    case 'formulas':
+                        const description = requestData || 'calculate percentage';
+                        response = await fetch(`${baseUrl}/api/excel/formulas?description=${encodeURIComponent(description)}`);
+                        break;
+                        
+                    case 'upload':
+                        response = await fetch(`${baseUrl}/api/excel/upload`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: requestData
+                        });
+                        break;
+                        
+                    case 'query':
+                        response = await fetch(`${baseUrl}/api/excel/query`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: requestData
+                        });
+                        break;
+                        
+                    default:
+                        throw new Error(`Unknown API call: ${callType}`);
+                }
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('status').textContent = 'Success!';
+                    
+                    // Send result back to parent
+                    Office.context.ui.messageParent(JSON.stringify({
+                        success: true,
+                        data: data
+                    }));
+                } else {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+            } catch (error) {
+                document.getElementById('status').textContent = `Error: ${error.message}`;
+                
+                // Send error back to parent
+                Office.context.ui.messageParent(JSON.stringify({
+                    success: false,
+                    error: error.message
+                }));
+            }
+        }
+    </script>
+</body>
+</html>

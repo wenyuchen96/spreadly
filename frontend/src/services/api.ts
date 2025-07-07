@@ -34,7 +34,7 @@ class SpreadlyAPI {
   private baseUrl: string;
   private sessionToken: string | null = null;
 
-  constructor(baseUrl: string = 'http://localhost:8000') {
+  constructor(baseUrl: string = 'http://127.0.0.1:8000') {
     this.baseUrl = baseUrl;
   }
 
@@ -160,10 +160,31 @@ class SpreadlyAPI {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
+      console.log('Checking backend health at:', `${this.baseUrl}/health`);
+      
+      // Use a shorter timeout for Excel Add-in environment
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const response = await fetch(`${this.baseUrl}/health`, {
+        method: 'GET',
+        mode: 'cors',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      console.log('Health check response:', response.status, response.ok);
       return response.ok;
     } catch (error) {
       console.error('Backend health check failed:', error);
+      console.error('Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        baseUrl: this.baseUrl,
+        name: error instanceof Error ? error.name : 'Unknown'
+      });
       return false;
     }
   }

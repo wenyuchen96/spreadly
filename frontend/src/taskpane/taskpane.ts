@@ -8,7 +8,9 @@
 import { ExcelOperations } from '../scriptlab';
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
 import { spreadlyAPI } from '../services/api';
+import { dialogAPI } from '../services/dialog-api';
 import { getSelectedRangeData, getWorksheetData, getWorksheetInfo } from '../services/excel-data';
+import { testBackendConnection, testFetchMethods } from '../services/test-connection';
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -129,8 +131,23 @@ function initializeChat() {
 async function processUserMessage(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
-  // Check if backend is available
-  const backendAvailable = await spreadlyAPI.healthCheck();
+  // For demo purposes, let's create a mock AI response system
+  // This simulates AI functionality without requiring backend connection
+  if (lowerMessage.includes('generate formula') || lowerMessage.includes('formula')) {
+    return await generateMockFormula(message);
+  }
+  
+  if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
+    return await generateMockAnalysis();
+  }
+  
+  if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
+    return await generateMockUpload();
+  }
+  
+  // Skip backend check for now due to Excel Add-in restrictions
+  // Try direct API call instead
+  const backendAvailable = false; // Force offline mode for now
   
   if (!backendAvailable) {
     return await processOfflineMessage(message);
@@ -183,6 +200,16 @@ async function processUserMessage(message: string, _engine: SimpleScriptLabEngin
 async function processOfflineMessage(message: string): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
+  // Try dialog API for specific commands
+  if (lowerMessage.includes('dialog api') || lowerMessage.includes('use dialog')) {
+    return await tryDialogApiCall(message);
+  }
+  
+  // Try direct API call for specific commands (bypass health check)
+  if (lowerMessage.includes('force api') || lowerMessage.includes('try backend')) {
+    return await tryDirectApiCall(message);
+  }
+  
   // Fallback to simple pattern matching when backend is unavailable
   if (lowerMessage.includes('highlight') || lowerMessage.includes('color')) {
     const color = extractColor(message) || 'yellow';
@@ -226,6 +253,20 @@ async function processOfflineMessage(message: string): Promise<{ message: string
     };
   }
   
+  if (lowerMessage.includes('debug simple') || lowerMessage.includes('quick test')) {
+    return {
+      message: "I'll do a quick connection test without iframe.",
+      code: "QUICK_CONNECTION_TEST"
+    };
+  }
+  
+  if (lowerMessage.includes('test connection') || lowerMessage.includes('debug connection')) {
+    return {
+      message: "I'll test the backend connection and show debug info in the console.",
+      code: "TEST_CONNECTION"
+    };
+  }
+  
   if (lowerMessage.includes('test') || lowerMessage.includes('demo')) {
     return {
       message: "I'll run a simple test directly with Excel API (no iframe).",
@@ -236,13 +277,19 @@ async function processOfflineMessage(message: string): Promise<{ message: string
   return {
     message: `Backend AI is currently unavailable. I can still help with basic operations:
     
+🔧 **Basic Operations:**
 • "highlight cells [color]" - to highlight selected cells
 • "insert data [[1,2],[3,4]]" - to insert data  
 • "create chart A1:C5" - to create charts
 • "format cells A1:B2" - to format cells
 • "test" - to run a demo
 
-For AI-powered analysis, please ensure the backend is running at http://localhost:8000`
+🚀 **Try Backend Connection:**
+• "dialog api" - use dialog window method (recommended)
+• "dialog api formula percentage" - test formula generation via dialog
+• "force api" - attempt direct API call (likely blocked)
+
+Note: Excel Add-ins block direct network requests. Dialog method bypasses this.`
   };
 }
 
@@ -309,6 +356,203 @@ async function handleDataUpload(): Promise<{ message: string; code?: string }> {
     return { 
       message: `✅ Data uploaded successfully!\n\n📊 **Data Summary:**\n• Range: ${worksheetData.range}\n• Rows: ${worksheetData.rowCount}\n• Columns: ${worksheetData.columnCount}\n• Session ID: ${result.session_token.substring(0, 8)}...\n\nYou can now ask me to "analyze" the data or ask questions about your spreadsheet!` 
     };
+  } catch (error) {
+    return { message: `❌ Error uploading data: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+async function tryDialogApiCall(message: string): Promise<{ message: string; code?: string }> {
+  try {
+    console.log('Attempting dialog API call...');
+    
+    // Try formula generation through dialog
+    if (message.includes('formula')) {
+      const description = message.replace(/dialog api|use dialog|formula/gi, '').trim() || 'calculate percentage';
+      
+      const response = await dialogAPI.generateFormulas(description);
+      
+      let responseMessage = `🎉 **Dialog API Success!** Generated formulas for: "${description}"\n\n`;
+      
+      response.formulas.forEach((formula: any, index: number) => {
+        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
+        responseMessage += `Formula: \`${formula.formula}\`\n`;
+        responseMessage += `Description: ${formula.description}\n\n`;
+      });
+      
+      const firstFormula = response.formulas[0];
+      return { 
+        message: responseMessage, 
+        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
+      };
+    }
+    
+    // Try health check through dialog
+    const healthCheck = await dialogAPI.healthCheck();
+    return { 
+      message: healthCheck 
+        ? `🎉 **Dialog API Success!** Backend is accessible through dialog method!`
+        : `❌ Dialog API health check failed. Backend may not be running.`
+    };
+  } catch (error) {
+    return { 
+      message: `❌ Dialog API error: ${error instanceof Error ? error.message : 'Unknown error'}\n\nThis method opens a dialog window to bypass Excel's network restrictions.` 
+    };
+  }
+}
+
+async function tryDirectApiCall(message: string): Promise<{ message: string; code?: string }> {
+  try {
+    console.log('Attempting direct API call...');
+    
+    // Try formula generation as a test
+    if (message.includes('formula')) {
+      const description = message.replace(/force api|try backend|formula/gi, '').trim() || 'calculate percentage';
+      
+      const response = await spreadlyAPI.generateFormulas(description);
+      
+      let responseMessage = `🎉 **Direct API Success!** Generated formulas for: "${description}"\n\n`;
+      
+      response.formulas.forEach((formula, index) => {
+        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
+        responseMessage += `Formula: \`${formula.formula}\`\n`;
+        responseMessage += `Description: ${formula.description}\n\n`;
+      });
+      
+      const firstFormula = response.formulas[0];
+      return { 
+        message: responseMessage, 
+        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
+      };
+    }
+    
+    // Try a simple health check
+    const response = await fetch('http://127.0.0.1:8000/health');
+    if (response.ok) {
+      const data = await response.json();
+      return { 
+        message: `🎉 **Direct API Success!** Backend is responding: ${JSON.stringify(data)}` 
+      };
+    } else {
+      return { 
+        message: `❌ Direct API call failed with status: ${response.status}` 
+      };
+    }
+  } catch (error) {
+    return { 
+      message: `❌ Direct API error: ${error instanceof Error ? error.message : 'Unknown error'}\n\nThe Excel Add-in environment likely blocks external network requests for security.` 
+    };
+  }
+}
+
+// Mock AI functions that simulate backend responses
+async function generateMockFormula(message: string): Promise<{ message: string; code?: string }> {
+  try {
+    // Extract what kind of formula they want
+    const description = message.toLowerCase();
+    
+    let formula = "SUM(A1:A10)";
+    let explanation = "Calculates the sum of values in range A1:A10";
+    
+    if (description.includes('percentage') || description.includes('percent')) {
+      formula = "=(B2-A2)/A2*100";
+      explanation = "Calculates percentage change between two values";
+    } else if (description.includes('average') || description.includes('mean')) {
+      formula = "=AVERAGE(A1:A10)";
+      explanation = "Calculates the average of values in range A1:A10";
+    } else if (description.includes('count')) {
+      formula = "=COUNTA(A1:A10)";
+      explanation = "Counts non-empty cells in range A1:A10";
+    } else if (description.includes('max') || description.includes('maximum')) {
+      formula = "=MAX(A1:A10)";
+      explanation = "Finds the maximum value in range A1:A10";
+    } else if (description.includes('min') || description.includes('minimum')) {
+      formula = "=MIN(A1:A10)";
+      explanation = "Finds the minimum value in range A1:A10";
+    } else if (description.includes('growth') || description.includes('change')) {
+      formula = "=((B2-A2)/A2)*100";
+      explanation = "Calculates growth rate as a percentage";
+    }
+    
+    const responseMessage = `🤖 **AI Formula Generated:**
+
+**Formula:** \`${formula}\`
+**Description:** ${explanation}
+
+**Usage Tips:**
+• Click to insert this formula into the selected cell
+• Adjust cell references (A1, B2, etc.) as needed
+• This formula will calculate automatically when cell values change
+
+*Note: This is a demo AI response. In production, this would be powered by Claude AI through the backend.*`;
+
+    return {
+      message: responseMessage,
+      code: `DIRECT_INSERT_FORMULA:${formula}`
+    };
+  } catch (error) {
+    return { message: `❌ Error generating formula: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+async function generateMockAnalysis(): Promise<{ message: string; code?: string }> {
+  try {
+    // Get current worksheet data for analysis
+    const worksheetData = await getWorksheetData();
+    
+    let analysisMessage = `🤖 **AI Analysis Results:**
+
+📊 **Data Summary:**
+• Spreadsheet Range: ${worksheetData.range}
+• Total Rows: ${worksheetData.rowCount}
+• Total Columns: ${worksheetData.columnCount}
+• Data Types: ${worksheetData.dataTypes.join(', ')}
+
+🔍 **Key Insights:**
+• Your data appears to be ${worksheetData.hasHeaders ? 'well-structured with headers' : 'numeric data without headers'}
+• Consider adding charts to visualize trends
+• Look for outliers in numeric columns
+• Validate data consistency across rows
+
+💡 **Recommendations:**
+• Use conditional formatting to highlight important values
+• Create pivot tables for data summarization
+• Apply data validation to ensure accuracy
+• Consider using formulas for calculated fields
+
+*Note: This is a demo AI analysis. In production, Claude AI would provide much more detailed insights based on actual data content.*`;
+
+    return { message: analysisMessage };
+  } catch (error) {
+    return { message: `❌ Error analyzing data: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+async function generateMockUpload(): Promise<{ message: string; code?: string }> {
+  try {
+    const worksheetData = await getWorksheetData();
+    const worksheetInfo = await getWorksheetInfo();
+    
+    const responseMessage = `✅ **Mock Data Upload Successful!**
+
+📄 **File Info:**
+• Sheet Name: ${worksheetInfo.activeSheet.name}
+• Data Range: ${worksheetData.range}
+• Rows: ${worksheetData.rowCount}
+• Columns: ${worksheetData.columnCount}
+
+🤖 **AI Processing Complete:**
+• Data structure analyzed
+• Statistical summary generated
+• Ready for AI queries and insights
+
+**Try these commands:**
+• "analyze" - Get detailed AI insights
+• "generate formula percentage" - Create custom formulas
+• Ask questions about your data
+
+*Note: This is a demo upload. In production, your data would be securely processed by Claude AI through the backend API.*`;
+
+    return { message: responseMessage };
   } catch (error) {
     return { message: `❌ Error uploading data: ${error instanceof Error ? error.message : 'Unknown error'}` };
   }
@@ -386,6 +630,14 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
 
 async function executeDirectOperation(code: string): Promise<string> {
   try {
+    if (code === "QUICK_CONNECTION_TEST") {
+      return await executeQuickConnectionTest();
+    }
+    
+    if (code === "TEST_CONNECTION") {
+      return await executeTestConnection();
+    }
+    
     if (code === "DIRECT_EXCEL_TEST") {
       return await executeDirectExcelTest();
     }
@@ -481,6 +733,43 @@ async function executeFormatCells(range: string): Promise<string> {
     return `✅ Range ${range} formatted with blue background and bold text!`;
   } catch (error) {
     return `❌ Failed to format cells: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+async function executeQuickConnectionTest(): Promise<string> {
+  try {
+    console.log('=== Quick Connection Test ===');
+    
+    // Simple fetch without timeout
+    const response = await spreadlyAPI.healthCheck();
+    
+    return response 
+      ? `✅ Quick test: Backend connection successful!` 
+      : `❌ Quick test: Backend connection failed. Check Console for details.`;
+  } catch (error) {
+    return `❌ Quick test error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+async function executeTestConnection(): Promise<string> {
+  try {
+    console.log('=== Starting Connection Test ===');
+    
+    // Test basic connection
+    const workingUrl = await testBackendConnection();
+    
+    if (workingUrl) {
+      console.log(`Found working URL: ${workingUrl}`);
+      
+      // Test different fetch methods with the working URL
+      const workingConfig = await testFetchMethods(workingUrl);
+      
+      return `✅ Connection test completed! Check the Console (F12) for detailed results.\n\nWorking URL: ${workingUrl}\nConfiguration: ${workingConfig ? JSON.stringify(workingConfig) : 'Default'}`;
+    } else {
+      return `❌ Connection test failed! Check the Console (F12) for detailed error messages.\n\nPossible issues:\n• Backend not running on http://127.0.0.1:8000\n• CORS restrictions in Excel Add-in environment\n• Network connectivity issues\n\nTry opening http://127.0.0.1:8000/health in your browser to verify the backend is working.`;
+    }
+  } catch (error) {
+    return `❌ Connection test error: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
 }
 
