@@ -1,54 +1,110 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from app.core.database import get_db
 from app.services.excel_service import ExcelService
-from app.services.ai_service import AIService
+from app.services.ai_service_simple import AIService
 from app.models.session import Session as SessionModel
 from app.models.spreadsheet import Spreadsheet
 import uuid
 
 router = APIRouter()
 
+@router.get("/test")
+async def test_connection():
+    """Simple test endpoint to verify frontend-backend connection"""
+    return {
+        "status": "success",
+        "message": "🎉 REAL backend connection successful!",
+        "timestamp": "2025-01-07T00:00:00Z",
+        "ai_powered": True
+    }
+
 @router.post("/upload")
 async def upload_excel(
-    file: UploadFile = File(...),
+    request: Request,
+    file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    """Upload and process Excel file"""
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        raise HTTPException(status_code=400, detail="Only Excel files are allowed")
-    
+    """Upload and process Excel file or data"""
     session_token = str(uuid.uuid4())
     
-    # Create session record
-    session = SessionModel(
-        session_token=session_token,
-        file_name=file.filename,
-        processing_status="processing"
-    )
-    db.add(session)
-    db.commit()
-    
-    try:
-        # Process Excel file
-        excel_service = ExcelService()
-        spreadsheet_data = await excel_service.process_file(file, session.id)
+    # Handle both file upload and JSON data
+    if file and file.filename:
+        # Traditional file upload
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(status_code=400, detail="Only Excel files are allowed")
         
-        # Update session status
-        session.processing_status = "completed"
-        session.analysis_result = spreadsheet_data.get("summary", "")
+        file_name = file.filename
+        # Create session record
+        session = SessionModel(
+            session_token=session_token,
+            file_name=file_name,
+            processing_status="processing"
+        )
+        db.add(session)
         db.commit()
         
-        return {
-            "session_token": session_token,
-            "message": "File uploaded and processed successfully",
-            "data": spreadsheet_data
-        }
-    except Exception as e:
-        session.processing_status = "failed"
-        db.commit()
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            # Process Excel file
+            excel_service = ExcelService()
+            spreadsheet_data = await excel_service.process_file(file, session.id)
+            
+            # Update session status
+            session.processing_status = "completed"
+            session.analysis_result = spreadsheet_data.get("summary", "")
+            db.commit()
+            
+            return {
+                "session_token": session_token,
+                "message": "File uploaded and processed successfully",
+                "data": spreadsheet_data
+            }
+        except Exception as e:
+            session.processing_status = "failed"
+            db.commit()
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # Handle JSON data from frontend
+        try:
+            request_body = await request.json()
+            if not request_body:
+                raise HTTPException(status_code=400, detail="No data provided")
+            
+            file_name = request_body.get("file_name", "spreadsheet.xlsx")
+            excel_data = request_body.get("data", [])
+            
+            if not excel_data:
+                raise HTTPException(status_code=400, detail="No Excel data provided")
+            
+            # Create session record
+            session = SessionModel(
+                session_token=session_token,
+                file_name=file_name,
+                processing_status="processing"
+            )
+            db.add(session)
+            db.commit()
+            
+            # Process data directly
+            excel_service = ExcelService()
+            spreadsheet_data = await excel_service.process_data(excel_data, session.id, file_name)
+            
+            # Update session status
+            session.processing_status = "completed"
+            session.analysis_result = spreadsheet_data.get("summary", "")
+            db.commit()
+            
+            return {
+                "session_token": session_token,
+                "message": "Data processed successfully",
+                "data": spreadsheet_data
+            }
+        except Exception as e:
+            if 'session' in locals():
+                session.processing_status = "failed"
+                db.commit()
+            raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/analyze/{session_token}")
 async def analyze_spreadsheet(

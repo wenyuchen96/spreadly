@@ -87,3 +87,43 @@ class ExcelService:
             summary += f"Sheet '{sheet_name}' has {data['shape'][0]} rows and {data['shape'][1]} columns. "
         
         return summary
+    
+    async def process_data(self, data: List[List], session_id: int, file_name: str) -> Dict[str, Any]:
+        """Process Excel data from frontend (array of arrays)"""
+        try:
+            # Convert data to pandas DataFrame
+            df = pd.DataFrame(data)
+            
+            # Generate file hash from data
+            data_string = str(data)
+            file_hash = hashlib.md5(data_string.encode()).hexdigest()
+            
+            # Analyze the data
+            analysis = self._analyze_sheet(df)
+            
+            # Create spreadsheet data
+            spreadsheet_data = {
+                "name": file_name,
+                "file_hash": file_hash,
+                "sheet_names": ["Sheet1"],
+                "sheets_analysis": {"Sheet1": analysis},
+                "summary": self._generate_summary_from_analysis({"Sheet1": analysis})
+            }
+            
+            return spreadsheet_data
+            
+        except Exception as e:
+            raise Exception(f"Error processing Excel data: {str(e)}")
+    
+    def _generate_summary_from_analysis(self, sheets_data: Dict[str, Any]) -> str:
+        """Generate a summary from analysis data"""
+        total_sheets = len(sheets_data)
+        total_rows = sum(data["shape"][0] for data in sheets_data.values())
+        total_cols = sum(data["shape"][1] for data in sheets_data.values())
+        
+        summary = f"Excel data contains {total_sheets} sheets with {total_rows} total rows and {total_cols} total columns. "
+        
+        for sheet_name, data in sheets_data.items():
+            summary += f"Sheet '{sheet_name}' has {data['shape'][0]} rows and {data['shape'][1]} columns. "
+        
+        return summary

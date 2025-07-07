@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HTTPS Proxy for Backend</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: center;
+        }
+        .success { 
+            background: rgba(76, 175, 80, 0.8); 
+            border: 2px solid #4CAF50;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+        .error { 
+            background: rgba(244, 67, 54, 0.8); 
+            border: 2px solid #f44336;
+            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.3);
+        }
+        .info { 
+            background: rgba(33, 150, 243, 0.8); 
+            border: 2px solid #2196F3;
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+        }
+        .loading { 
+            text-align: center; 
+            color: #fff;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .details {
+            font-size: 0.9em;
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 Spreadly Backend Proxy</h1>
+        <div id="status" class="status info">
+            <div class="loading">
+                <div class="spinner"></div>
+                🔄 Establishing secure connection to backend...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let proxyWorker = null;
+        
+        Office.onReady(() => {
+            handleProxyRequest();
+        });
+
+        async function handleProxyRequest() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                // Get parameters from URL
+                const params = new URLSearchParams(window.location.search);
+                const endpoint = params.get('endpoint') || '/health';
+                const method = params.get('method') || 'GET';
+                const data = params.get('data');
+                
+                statusDiv.innerHTML = `
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        🌐 Connecting to: ${endpoint}<br>
+                        Method: ${method}
+                    </div>
+                `;
+                
+                // Try HTTPS first, then HTTP as fallback
+                const backendUrls = [
+                    'https://127.0.0.1:8000',
+                    'https://localhost:8000',
+                    'http://127.0.0.1:8000',
+                    'http://localhost:8000'
+                ];
+                
+                let lastError = null;
+                
+                for (const baseUrl of backendUrls) {
+                    try {
+                        statusDiv.innerHTML = `
+                            <div class="loading">
+                                <div class="spinner"></div>
+                                🔍 Trying: ${baseUrl}${endpoint}
+                            </div>
+                        `;
+                        
+                        const response = await attemptConnection(baseUrl, endpoint, method, data);
+                        
+                        if (response.success) {
+                            statusDiv.innerHTML = `
+                                <div class="success">
+                                    ✅ <strong>Connection Successful!</strong><br>
+                                    URL: ${baseUrl}${endpoint}<br>
+                                    <div class="details">
+                                        ${JSON.stringify(response.data, null, 2)}
+                                    </div>
+                                </div>
+                            `;
+                            
+                            // Send success result back to parent
+                            Office.context.ui.messageParent(JSON.stringify({
+                                success: true,
+                                data: response.data,
+                                endpoint: endpoint,
+                                method: method,
+                                workingUrl: baseUrl
+                            }));
+                            return;
+                        }
+                    } catch (error) {
+                        lastError = error;
+                        console.log(`Failed ${baseUrl}: ${error.message}`);
+                    }
+                }
+                
+                // All URLs failed
+                throw lastError || new Error('All connection attempts failed');
+                
+            } catch (error) {
+                console.error('Proxy error:', error);
+                
+                statusDiv.innerHTML = `
+                    <div class="error">
+                        ❌ <strong>All Connection Methods Failed</strong><br><br>
+                        <strong>Last Error:</strong> ${error.message}<br><br>
+                        <strong>URLs Attempted:</strong><br>
+                        ${backendUrls.map(url => `• ${url}${endpoint}`).join('<br>')}<br><br>
+                        <strong>HTTPS Backend Status:</strong><br>
+                        Backend should be running on: <code>https://127.0.0.1:8000</code><br>
+                        Test in browser: <a href="https://127.0.0.1:8000/health" target="_blank" style="color: #fff;">https://127.0.0.1:8000/health</a><br><br>
+                        <strong>Start HTTPS Backend:</strong><br>
+                        <code>uvicorn app.main:app --reload --host 127.0.0.1 --ssl-keyfile=key.pem --ssl-certfile=cert.pem</code><br><br>
+                        <strong>Excel Add-in Result:</strong><br>
+                        Excel blocks ${lastError?.message?.includes('https') ? 'HTTPS localhost' : 'HTTP localhost'} requests for security.
+                    </div>
+                `;
+                
+                // Send error back to parent window
+                Office.context.ui.messageParent(JSON.stringify({
+                    success: false,
+                    error: error.message,
+                    endpoint: endpoint,
+                    method: method,
+                    details: 'Excel Add-in security restrictions may be blocking HTTP requests'
+                }));
+            }
+        }
+        
+        async function attemptConnection(baseUrl, endpoint, method, data) {
+            const url = `${baseUrl}${endpoint}`;
+            
+            const fetchOptions = {
+                method: method,
+                mode: 'cors',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                timeout: 8000
+            };
+            
+            if (data && (method === 'POST' || method === 'PUT')) {
+                fetchOptions.body = data;
+            }
+            
+            console.log(`Attempting ${method} request to ${url}`);
+            
+            const response = await fetch(url, fetchOptions);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            
+            return {
+                success: true,
+                data: result
+            };
+        }
+    </script>
+</body>
+</html>

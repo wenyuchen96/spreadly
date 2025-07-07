@@ -9,6 +9,7 @@ import { ExcelOperations } from '../scriptlab';
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
 import { spreadlyAPI } from '../services/api';
 import { dialogAPI } from '../services/dialog-api';
+import { mockBackend } from '../services/mock-backend';
 import { getSelectedRangeData, getWorksheetData, getWorksheetInfo } from '../services/excel-data';
 import { testBackendConnection, testFetchMethods } from '../services/test-connection';
 
@@ -131,29 +132,66 @@ function initializeChat() {
 async function processUserMessage(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
-  // For demo purposes, let's create a mock AI response system
-  // This simulates AI functionality without requiring backend connection
-  if (lowerMessage.includes('generate formula') || lowerMessage.includes('formula')) {
-    return await generateMockFormula(message);
+  // Try Dialog API FIRST for better compatibility with Excel Add-ins
+  if (lowerMessage.includes('dialog') || lowerMessage.includes('real') || lowerMessage.includes('backend')) {
+    return await tryDialogApiCall(message);
   }
   
-  if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
-    return await generateMockAnalysis();
+  // Try to connect to backend FIRST (enable real AI)
+  let backendAvailable = false;
+  
+  // Special handling for backend test commands
+  if (lowerMessage.includes('test backend') || lowerMessage.includes('real test')) {
+    try {
+      console.log('🔍 Testing backend connection...');
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 5000); // 5 second timeout for manual test
+      
+      const response = await fetch('http://127.0.0.1:8000/api/excel/test', {
+        signal: controller.signal,
+        mode: 'cors'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Backend test successful:', data);
+        return { message: `🎉 **Backend Connection Successful!**\n\n${data.message}\n\nFull response: ${JSON.stringify(data, null, 2)}` };
+      } else {
+        console.log('❌ Backend responded with error:', response.status);
+        return { message: `❌ Backend test failed with HTTP ${response.status}` };
+      }
+    } catch (error) {
+      console.log('❌ Backend connection error:', error);
+      return { message: `❌ Backend connection failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nMake sure backend is running at http://127.0.0.1:8000` };
+    }
   }
   
-  if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
-    return await generateMockUpload();
+  try {
+    // Quick connection test with shorter timeout for regular commands
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 2000); // 2 second timeout
+    
+    const response = await fetch('http://127.0.0.1:8000/health', {
+      signal: controller.signal,
+      mode: 'cors'
+    });
+    backendAvailable = response.ok;
+    console.log('Backend connection:', backendAvailable ? 'SUCCESS' : 'FAILED');
+  } catch (error) {
+    console.log('Backend connection failed:', error instanceof Error ? error.message : error);
+    backendAvailable = false;
   }
-  
-  // Skip backend check for now due to Excel Add-in restrictions
-  // Try direct API call instead
-  const backendAvailable = false; // Force offline mode for now
   
   if (!backendAvailable) {
+    // Try mock backend as intelligent fallback
+    if (lowerMessage.includes('mock') || lowerMessage.includes('smart') || lowerMessage.includes('ai demo')) {
+      return await processWithMockBackend(message);
+    }
     return await processOfflineMessage(message);
   }
   
-  // AI-powered processing with backend
+  // 🎉 REAL AI-powered processing with backend!
+  console.log('Using REAL backend AI!');
   try {
     // Handle special commands first
     if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis') || lowerMessage.includes('insights')) {
@@ -197,6 +235,99 @@ async function processUserMessage(message: string, _engine: SimpleScriptLabEngin
   }
 }
 
+async function processWithMockBackend(message: string): Promise<{ message: string; code?: string }> {
+  const lowerMessage = message.toLowerCase();
+  
+  try {
+    if (lowerMessage.includes('formula') || lowerMessage.includes('generate formula')) {
+      const description = message.replace(/mock|smart|ai demo|generate formula|formula/gi, '').trim() || 'calculate percentage';
+      
+      const response = await mockBackend.generateFormulas(description);
+      
+      let responseMessage = `🤖 **Smart AI Demo - Formula Generated:**\n\n`;
+      responseMessage += `**Request:** "${description}"\n\n`;
+      
+      response.formulas.forEach((formula, index) => {
+        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
+        responseMessage += `Formula: \`${formula.formula}\`\n`;
+        responseMessage += `Description: ${formula.description}\n`;
+        if (formula.example) {
+          responseMessage += `Example: ${formula.example}\n`;
+        }
+        responseMessage += `\n`;
+      });
+      
+      responseMessage += `*This is powered by our smart mock AI - realistic responses without network connectivity!*`;
+      
+      const firstFormula = response.formulas[0];
+      return { 
+        message: responseMessage, 
+        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
+      };
+    }
+    
+    if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
+      const analysis = await mockBackend.getAnalysis();
+      
+      let message = `🤖 **Smart AI Analysis:**\n\n`;
+      
+      message += `**Key Insights:**\n`;
+      analysis.analysis.insights.forEach((insight, index) => {
+        message += `${index + 1}. ${insight}\n`;
+      });
+      message += `\n`;
+      
+      message += `**Recommendations:**\n`;
+      analysis.analysis.suggestions.forEach((suggestion, index) => {
+        message += `${index + 1}. ${suggestion}\n`;
+      });
+      
+      message += `\n*Smart AI Demo - providing realistic analysis without backend connectivity!*`;
+      
+      return { message };
+    }
+    
+    if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
+      const worksheetData = await getWorksheetData();
+      const worksheetInfo = await getWorksheetInfo();
+      
+      const uploadResponse = await mockBackend.uploadData(worksheetData.data, worksheetInfo.activeSheet.name);
+      
+      const message = `🤖 **Smart AI Upload Complete:**\n\n` +
+        `📊 **Data Summary:**\n` +
+        `• File: ${worksheetInfo.activeSheet.name}\n` +
+        `• Rows: ${worksheetData.rowCount}\n` +
+        `• Columns: ${worksheetData.columnCount}\n` +
+        `• Session: ${uploadResponse.session_token.substring(0, 12)}...\n\n` +
+        `**Next Steps:**\n` +
+        `• Try "smart analyze" for AI insights\n` +
+        `• Ask "smart formula percentage" for formulas\n` +
+        `• Query your data with "smart [your question]"\n\n` +
+        `*Smart AI Demo - full functionality without network requirements!*`;
+      
+      return { message };
+    }
+    
+    // General query processing
+    const queryResponse = await mockBackend.processQuery(message);
+    
+    let responseMessage = `🤖 **Smart AI Response:**\n\n${queryResponse.result.answer}`;
+    
+    let code: string | undefined;
+    if (queryResponse.result.formula) {
+      responseMessage += `\n\n**Suggested Formula:** \`${queryResponse.result.formula}\``;
+      code = `DIRECT_INSERT_FORMULA:${queryResponse.result.formula}`;
+    }
+    
+    responseMessage += `\n\n*Smart AI Demo - providing intelligent responses without backend connectivity!*`;
+    
+    return { message: responseMessage, code };
+    
+  } catch (error) {
+    return { message: `❌ Smart AI error: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
 async function processOfflineMessage(message: string): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
@@ -208,6 +339,19 @@ async function processOfflineMessage(message: string): Promise<{ message: string
   // Try direct API call for specific commands (bypass health check)
   if (lowerMessage.includes('force api') || lowerMessage.includes('try backend')) {
     return await tryDirectApiCall(message);
+  }
+  
+  // Use mock AI responses as fallback when backend unavailable
+  if (lowerMessage.includes('generate formula') || lowerMessage.includes('formula')) {
+    return await generateMockFormula(message);
+  }
+  
+  if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
+    return await generateMockAnalysis();
+  }
+  
+  if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
+    return await generateMockUpload();
   }
   
   // Fallback to simple pattern matching when backend is unavailable
@@ -264,6 +408,12 @@ async function processOfflineMessage(message: string): Promise<{ message: string
     return {
       message: "I'll test the backend connection and show debug info in the console.",
       code: "TEST_CONNECTION"
+    };
+  }
+  
+  if (lowerMessage.includes('test backend') || lowerMessage.includes('real test')) {
+    return {
+      message: "❌ Backend connection failed in offline mode. Make sure the FastAPI server is running at http://127.0.0.1:8000",
     };
   }
   
@@ -799,11 +949,23 @@ async function executeDirectExcelTest(): Promise<string> {
   try {
     await Excel.run(async (context) => {
       const range = context.workbook.getSelectedRange();
-      range.load("address");
+      range.load(["address", "rowCount", "columnCount"]);
       await context.sync();
       
-      // Simple test: write data and format cells
-      range.values = [["Hello", "from"], ["Spreadly", "Direct!"]];
+      // Simple test: write data that fits the selection
+      if (range.rowCount === 1 && range.columnCount === 1) {
+        // Single cell selected
+        range.values = [["✅ Spreadly Test!"]];
+      } else {
+        // Multiple cells selected - expand to fit our data
+        const testRange = range.getResizedRange(1, 1); // 2x2 range
+        testRange.values = [["Hello", "from"], ["Spreadly", "Direct!"]];
+        range.format.fill.color = "lightblue";
+        range.format.font.bold = true;
+        range.format.font.size = 14;
+        return;
+      }
+      
       range.format.fill.color = "lightblue";
       range.format.font.bold = true;
       range.format.font.size = 14;

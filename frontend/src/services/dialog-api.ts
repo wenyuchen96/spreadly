@@ -21,13 +21,18 @@ class DialogAPI {
   /**
    * Make API call through dialog window
    */
-  private async makeDialogCall(callType: string, data?: string): Promise<DialogResult> {
+  private async makeDialogCall(endpoint: string, method: string = 'GET', data?: string): Promise<DialogResult> {
     return new Promise((resolve, reject) => {
-      const url = `${this.dialogUrl}/dialog/api-bridge.html?call=${callType}&data=${encodeURIComponent(data || '')}`;
+      const params = new URLSearchParams({
+        endpoint,
+        method,
+        ...(data && { data })
+      });
+      const url = `${this.dialogUrl}/dialog/https-proxy.html?${params.toString()}&_t=${Date.now()}`;
       
       Office.context.ui.displayDialogAsync(url, {
-        height: 30,
-        width: 20,
+        height: 40,
+        width: 50,
         displayInIframe: false
       }, (result: any) => {
         if (result.status === Office.AsyncResultStatus.Failed) {
@@ -63,7 +68,7 @@ class DialogAPI {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const result = await this.makeDialogCall('health');
+      const result = await this.makeDialogCall('/health', 'GET');
       return result.success;
     } catch (error) {
       console.error('Dialog health check failed:', error);
@@ -76,7 +81,7 @@ class DialogAPI {
    */
   async generateFormulas(description: string): Promise<any> {
     try {
-      const result = await this.makeDialogCall('formulas', description);
+      const result = await this.makeDialogCall(`/api/excel/formulas?description=${encodeURIComponent(description)}`, 'GET');
       if (result.success) {
         return result.data;
       } else {
@@ -93,7 +98,7 @@ class DialogAPI {
    */
   async uploadData(data: any): Promise<any> {
     try {
-      const result = await this.makeDialogCall('upload', JSON.stringify(data));
+      const result = await this.makeDialogCall('/api/excel/upload', 'POST', JSON.stringify(data));
       if (result.success) {
         return result.data;
       } else {
@@ -111,7 +116,7 @@ class DialogAPI {
   async sendQuery(query: string, sessionToken: string): Promise<any> {
     try {
       const requestData = { query, session_token: sessionToken };
-      const result = await this.makeDialogCall('query', JSON.stringify(requestData));
+      const result = await this.makeDialogCall('/api/excel/query', 'POST', JSON.stringify(requestData));
       if (result.success) {
         return result.data;
       } else {

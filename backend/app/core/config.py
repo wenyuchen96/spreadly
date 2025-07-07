@@ -20,7 +20,15 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # CORS
-    ALLOWED_HOSTS: List[str] = ["http://localhost:3000", "https://localhost:3000"]
+    ALLOWED_HOSTS: List[str] = [
+        "http://localhost:3000", 
+        "https://localhost:3000", 
+        "https://localhost:3001",
+        "https://excel.officeapps.live.com",
+        "https://excel.office.com", 
+        "https://office.live.com",
+        "*"  # Allow all origins for development
+    ]
     
     # File Upload
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
