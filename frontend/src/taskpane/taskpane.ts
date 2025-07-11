@@ -5,13 +5,14 @@
 
 /* global console, document, Excel, Office */
 
-import { ExcelOperations } from '../scriptlab';
+// import { ExcelOperations } from '../scriptlab'; // Unused
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
 import { spreadlyAPI } from '../services/api';
 import { dialogAPI } from '../services/dialog-api';
 import { mockBackend } from '../services/mock-backend';
 import { getSelectedRangeData, getWorksheetData, getWorksheetInfo } from '../services/excel-data';
-import { testBackendConnection, testFetchMethods } from '../services/test-connection';
+import { testBackendConnection as serviceTestConnection, testFetchMethods } from '../services/test-connection';
+import { BASE_URL, getApiUrl } from '../config/api-config';
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -129,109 +130,183 @@ function initializeChat() {
   }
 }
 
-async function processUserMessage(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
+async function processUserMessage(message: string, engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
   const lowerMessage = message.toLowerCase();
   
-  // Try Dialog API FIRST for better compatibility with Excel Add-ins
-  if (lowerMessage.includes('dialog') || lowerMessage.includes('real') || lowerMessage.includes('backend')) {
-    return await tryDialogApiCall(message);
+  // Special command: Test connection
+  if (lowerMessage.includes('test') && (lowerMessage.includes('connection') || lowerMessage.includes('backend'))) {
+    return await testBackendConnection();
   }
   
-  // Try to connect to backend FIRST (enable real AI)
-  let backendAvailable = false;
-  
-  // Special handling for backend test commands
-  if (lowerMessage.includes('test backend') || lowerMessage.includes('real test')) {
-    try {
-      console.log('🔍 Testing backend connection...');
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 5000); // 5 second timeout for manual test
-      
-      const response = await fetch('http://127.0.0.1:8000/api/excel/test', {
-        signal: controller.signal,
-        mode: 'cors'
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Backend test successful:', data);
-        return { message: `🎉 **Backend Connection Successful!**\n\n${data.message}\n\nFull response: ${JSON.stringify(data, null, 2)}` };
-      } else {
-        console.log('❌ Backend responded with error:', response.status);
-        return { message: `❌ Backend test failed with HTTP ${response.status}` };
-      }
-    } catch (error) {
-      console.log('❌ Backend connection error:', error);
-      return { message: `❌ Backend connection failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nMake sure backend is running at http://127.0.0.1:8000` };
-    }
+  // Debug command: Test upload only
+  if (lowerMessage.includes('debug') && lowerMessage.includes('upload')) {
+    return await debugUpload();
   }
   
+  // Special command: Generate formulas
+  if (lowerMessage.includes('formula') || lowerMessage.includes('calculate')) {
+    return await generateFormula(message);
+  }
+  
+  // Fallback: Use formula endpoint for general chat if session fails
+  if (lowerMessage.includes('fallback') || lowerMessage.includes('simple')) {
+    return await generateFormula(message); // This works without sessions
+  }
+  
+  // Default: Direct AI chat via backend
+  return await chatWithAI(message, engine);
+}
+
+// Debug upload function
+async function debugUpload(): Promise<{ message: string }> {
   try {
-    // Quick connection test with shorter timeout for regular commands
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 2000); // 2 second timeout
+    const uploadResponse = await spreadlyAPI.uploadExcelData([['Test', 'Data']], 'DebugTest');
+    return { message: `✅ **Upload Success!**\n\nSession: ${uploadResponse.session_token}\nMessage: ${uploadResponse.message}` };
+  } catch (error) {
+    return { message: `❌ **Upload Failed!**\n\nError: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+// Test backend connection
+async function testBackendConnection(): Promise<{ message: string }> {
+  try {
+    const response = await fetch(getApiUrl('health'), {
+      method: 'GET',
+      mode: 'cors',
+      headers: {
+        'ngrok-skip-browser-warning': 'true'
+      }
+    });
     
-    const response = await fetch('http://127.0.0.1:8000/health', {
-      signal: controller.signal,
+    if (response.ok) {
+      const data = await response.json();
+      return { message: `✅ **Connected to AI Backend!**\n\n${data.message || 'Backend is healthy'}` };
+    } else {
+      return { message: `❌ Backend responded with HTTP ${response.status}` };
+    }
+  } catch (error) {
+    return { message: `❌ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nMake sure backend is running at ${BASE_URL}` };
+  }
+}
+
+// Generate Excel formulas using AI
+async function generateFormula(description: string): Promise<{ message: string }> {
+  try {
+    const params = new URLSearchParams({ description });
+    const response = await fetch(`${BASE_URL}/api/excel/formulas?${params}`, {
+      method: 'GET',
+      mode: 'cors',
+      headers: {
+        'ngrok-skip-browser-warning': 'true'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    let message = `## 📊 Formula Generated\n\n**Request:** ${data.description}\n\n`;
+    
+    data.formulas.forEach((formula: any, index: number) => {
+      message += `### Formula ${index + 1}: ${formula.difficulty}\n`;
+      message += `**Formula:** \`${formula.formula}\`\n`;
+      message += `**Description:** ${formula.description}\n`;
+      message += `**Example:** ${formula.example}\n\n`;
+    });
+    
+    return { message };
+  } catch (error) {
+    return { message: `❌ Formula generation failed: ${error instanceof Error ? error.message : 'Unknown error'}` };
+  }
+}
+
+// Direct AI chat with backend
+async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
+  try {
+    // First, get or create a session token
+    let sessionToken = spreadlyAPI.getSessionToken();
+    
+    if (!sessionToken) {
+      // Create a session by uploading some sample data
+      try {
+        const excelData = await getSelectedRangeData();
+        const uploadResponse = await spreadlyAPI.uploadExcelData(excelData.data, 'ChatSession');
+        sessionToken = uploadResponse.session_token;
+      } catch {
+        // No data selected, create session with minimal data
+        const uploadResponse = await spreadlyAPI.uploadExcelData([['Chat', 'Session']], 'DirectChat');
+        sessionToken = uploadResponse.session_token;
+      }
+    }
+    
+    // Use the query endpoint for direct AI conversation
+    const response = await fetch(`${BASE_URL}/api/excel/query`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true'
+      },
+      body: JSON.stringify({
+        session_token: sessionToken,
+        query: message
+      }),
       mode: 'cors'
     });
-    backendAvailable = response.ok;
-    console.log('Backend connection:', backendAvailable ? 'SUCCESS' : 'FAILED');
-  } catch (error) {
-    console.log('Backend connection failed:', error instanceof Error ? error.message : error);
-    backendAvailable = false;
-  }
-  
-  if (!backendAvailable) {
-    // Try mock backend as intelligent fallback
-    if (lowerMessage.includes('mock') || lowerMessage.includes('smart') || lowerMessage.includes('ai demo')) {
-      return await processWithMockBackend(message);
-    }
-    return await processOfflineMessage(message);
-  }
-  
-  // 🎉 REAL AI-powered processing with backend!
-  console.log('Using REAL backend AI!');
-  try {
-    // Handle special commands first
-    if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis') || lowerMessage.includes('insights')) {
-      return await handleAnalysisRequest();
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
     }
     
-    if (lowerMessage.includes('upload') || lowerMessage.includes('process') || lowerMessage.includes('send data')) {
-      return await handleDataUpload();
-    }
+    const data = await response.json();
     
-    if (lowerMessage.includes('formula') || lowerMessage.includes('generate formula')) {
-      return await handleFormulaGeneration(message);
-    }
+    // Extract AI response
+    let aiMessage = '';
+    let generatedCode = null;
     
-    // For general queries, try to get context from current spreadsheet
-    const hasSessionToken = spreadlyAPI.getSessionToken();
-    
-    if (hasSessionToken) {
-      // Send query to AI with existing session context
-      const response = await spreadlyAPI.sendQuery(message);
-      
-      let responseMessage = response.result.answer || "I processed your request.";
-      let code: string | undefined;
-      
-      // If AI suggests a formula, extract it
-      if (response.result.formula) {
-        responseMessage += `\n\nSuggested formula: ${response.result.formula}`;
-        code = `DIRECT_INSERT_FORMULA:${response.result.formula}`;
+    if (data.result) {
+      if (data.result.answer) {
+        aiMessage = data.result.answer;
       }
       
-      return { message: responseMessage, code };
+      if (data.result.formula) {
+        aiMessage += `\n\n**Formula:** \`${data.result.formula}\`\n`;
+      }
+      
+      if (data.result.explanation) {
+        aiMessage += `\n**Explanation:** ${data.result.explanation}\n`;
+      }
+      
+      if (data.result.code) {
+        generatedCode = data.result.code;
+      }
+      
+      // Check if AI wants to execute code in Script Lab
+      if (data.result.execute_code || message.toLowerCase().includes('execute') || message.toLowerCase().includes('run code')) {
+        generatedCode = data.result.code || data.result.formula;
+      }
+      
+      if (data.result.next_steps && data.result.next_steps.length > 0) {
+        aiMessage += `\n**Next Steps:**\n`;
+        data.result.next_steps.forEach((step: string) => {
+          aiMessage += `• ${step}\n`;
+        });
+      }
     } else {
-      // No session yet, suggest uploading data first
-      return {
-        message: `I'd love to help with: "${message}"\n\nTo provide the best assistance, I need to analyze your spreadsheet data first. Would you like me to:\n\n• "upload data" - to analyze your current spreadsheet\n• "analyze" - to get AI insights\n• "generate formula [description]" - to create Excel formulas\n\nOr I can help with basic operations without AI analysis.`
-      };
+      aiMessage = data.answer || JSON.stringify(data, null, 2);
     }
+    
+    return { 
+      message: aiMessage || '🤖 AI response received but was empty',
+      code: generatedCode
+    };
+    
   } catch (error) {
-    console.error('AI processing error:', error);
-    return await processOfflineMessage(message);
+    console.error('chatWithAI error details:', error);
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error message:', errorMsg);
+    console.error('Error name:', error instanceof Error ? error.name : 'Unknown');
+    return { message: `❌ AI chat failed: ${errorMsg}\n\nBackend URL: ${BASE_URL}\nCheck browser console (F12) for details.` };
   }
 }
 
@@ -413,7 +488,7 @@ async function processOfflineMessage(message: string): Promise<{ message: string
   
   if (lowerMessage.includes('test backend') || lowerMessage.includes('real test')) {
     return {
-      message: "❌ Backend connection failed in offline mode. Make sure the FastAPI server is running at http://127.0.0.1:8000",
+      message: `❌ Backend connection failed in offline mode. Make sure the FastAPI server is running at ${BASE_URL}`,
     };
   }
   
@@ -576,7 +651,7 @@ async function tryDirectApiCall(message: string): Promise<{ message: string; cod
     }
     
     // Try a simple health check
-    const response = await fetch('http://127.0.0.1:8000/health');
+    const response = await fetch(getApiUrl('health'));
     if (response.ok) {
       const data = await response.json();
       return { 
@@ -758,7 +833,60 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
       return await executeDirectOperation(code);
     }
     
-    // Original iframe-based execution (fallback)
+    // Handle Excel formulas
+    if (code.includes("=") && !code.includes("function") && !code.includes("await")) {
+      return await insertFormulaToSelectedCell(code);
+    }
+    
+    // Handle JavaScript/TypeScript code for financial models
+    if (code.includes("Excel.run") || code.includes("context.workbook") || code.includes("worksheet")) {
+      return await executeExcelScriptCode(code, engine);
+    }
+    
+    // Handle general JavaScript code
+    return await executeGeneralCode(code, engine);
+    
+  } catch (error) {
+    return `❌ Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+// Execute Excel script code (for financial models, data manipulation, etc.)
+async function executeExcelScriptCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
+  try {
+    // Wrap the code in a proper Excel.run context if it's not already
+    let wrappedCode = code;
+    if (!code.includes("Excel.run")) {
+      wrappedCode = `
+await Excel.run(async (context) => {
+  ${code}
+  await context.sync();
+});
+`;
+    }
+    
+    const snippet = engine.createSnippet(
+      'AI Financial Model Code',
+      wrappedCode,
+      '<div id="output">Executing financial model...</div>',
+      'body { padding: 10px; font-family: monospace; }'
+    );
+    
+    const result = await engine.executeSnippet(snippet);
+    
+    if (result.success) {
+      return `✅ **Financial model executed successfully!**\n\n${result.result || 'Excel operations completed.'}`;
+    } else {
+      return `❌ **Financial model execution failed:**\n\n${result.error}`;
+    }
+  } catch (error) {
+    return `❌ Error executing financial model: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+// Execute general JavaScript code
+async function executeGeneralCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
+  try {
     const snippet = engine.createSnippet(
       'AI Generated Code',
       code,
@@ -775,6 +903,29 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
     }
   } catch (error) {
     return `❌ Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
+// Insert formula directly into selected cell
+async function insertFormulaToSelectedCell(formula: string): Promise<string> {
+  try {
+    await Excel.run(async (context) => {
+      const range = context.workbook.getSelectedRange();
+      range.load("address");
+      await context.sync();
+      
+      // Clean the formula (remove surrounding quotes if present)
+      const cleanFormula = formula.replace(/^["'`]|["'`]$/g, '');
+      
+      range.formulas = [[cleanFormula]];
+      await context.sync();
+      
+      return `✅ **Formula inserted into ${range.address}:**\n\n\`${cleanFormula}\``;
+    });
+    
+    return `✅ Formula inserted successfully!`;
+  } catch (error) {
+    return `❌ Failed to insert formula: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
 }
 
@@ -906,7 +1057,7 @@ async function executeTestConnection(): Promise<string> {
     console.log('=== Starting Connection Test ===');
     
     // Test basic connection
-    const workingUrl = await testBackendConnection();
+    const workingUrl = await serviceTestConnection();
     
     if (workingUrl) {
       console.log(`Found working URL: ${workingUrl}`);
@@ -916,7 +1067,7 @@ async function executeTestConnection(): Promise<string> {
       
       return `✅ Connection test completed! Check the Console (F12) for detailed results.\n\nWorking URL: ${workingUrl}\nConfiguration: ${workingConfig ? JSON.stringify(workingConfig) : 'Default'}`;
     } else {
-      return `❌ Connection test failed! Check the Console (F12) for detailed error messages.\n\nPossible issues:\n• Backend not running on http://127.0.0.1:8000\n• CORS restrictions in Excel Add-in environment\n• Network connectivity issues\n\nTry opening http://127.0.0.1:8000/health in your browser to verify the backend is working.`;
+      return `❌ Connection test failed! Check the Console (F12) for detailed error messages.\n\nPossible issues:\n• Backend not running on ${BASE_URL}\n• CORS restrictions in Excel Add-in environment\n• Network connectivity issues\n\nTry opening ${getApiUrl('health')} in your browser to verify the backend is working.`;
     }
   } catch (error) {
     return `❌ Connection test error: ${error instanceof Error ? error.message : 'Unknown error'}`;

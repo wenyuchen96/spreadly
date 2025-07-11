@@ -2,6 +2,8 @@
  * API client for communicating with the Spreadly backend
  */
 
+import { BASE_URL } from '../config/api-config';
+
 interface UploadResponse {
   session_token: string;
   message: string;
@@ -34,7 +36,7 @@ class SpreadlyAPI {
   private baseUrl: string;
   private sessionToken: string | null = null;
 
-  constructor(baseUrl: string = 'http://127.0.0.1:8000') {
+  constructor(baseUrl: string = BASE_URL) {
     this.baseUrl = baseUrl;
   }
 
@@ -57,6 +59,7 @@ class SpreadlyAPI {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
         },
         body: JSON.stringify(payload)
       });
@@ -204,5 +207,5 @@ class SpreadlyAPI {
   }
 }
 
-export const spreadlyAPI = new SpreadlyAPI();
+export const spreadlyAPI = new SpreadlyAPI(BASE_URL);
 export type { UploadResponse, AnalysisResponse, QueryResponse, FormulaResponse };

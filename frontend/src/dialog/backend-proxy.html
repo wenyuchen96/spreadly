@@ -53,8 +53,8 @@
                 
                 statusDiv.innerHTML = `<div class="loading">🌐 Connecting to backend: ${endpoint}</div>`;
                 
-                // Construct full URL
-                const backendUrl = `http://127.0.0.1:8000${endpoint}`;
+                // Construct full URL - update this to your ngrok URL when using ngrok
+                const backendUrl = `http://127.0.0.1:8000${endpoint}`; // Change to https://YOUR_NGROK_URL.ngrok.io
                 
                 // Prepare fetch options
                 const fetchOptions = {

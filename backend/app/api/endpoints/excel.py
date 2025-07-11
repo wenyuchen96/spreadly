@@ -95,10 +95,23 @@ async def upload_excel(
             session.analysis_result = spreadsheet_data.get("summary", "")
             db.commit()
             
+            # Convert any numpy/pandas objects to JSON-serializable format
+            serializable_data = {}
+            if spreadsheet_data:
+                for key, value in spreadsheet_data.items():
+                    if hasattr(value, 'tolist'):  # numpy array
+                        serializable_data[key] = value.tolist()
+                    elif hasattr(value, 'to_dict'):  # pandas DataFrame
+                        serializable_data[key] = value.to_dict()
+                    elif hasattr(value, 'item'):  # numpy scalar
+                        serializable_data[key] = value.item()
+                    else:
+                        serializable_data[key] = str(value)  # Fallback to string
+            
             return {
                 "session_token": session_token,
                 "message": "Data processed successfully",
-                "data": spreadsheet_data
+                "data": serializable_data
             }
         except Exception as e:
             if 'session' in locals():

@@ -2,8 +2,11 @@
  * Test connection to backend from Excel Add-in environment
  */
 
+import { BASE_URL } from '../config/api-config';
+
 export async function testBackendConnection() {
   const baseUrls = [
+    BASE_URL,
     'http://127.0.0.1:8000',
     'http://localhost:8000'
   ];

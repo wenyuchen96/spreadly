@@ -20,7 +20,8 @@
         });
         
         async function makeApiCall(callType, requestData) {
-            const baseUrl = 'http://127.0.0.1:8000';
+            // Configure baseUrl - update this to your ngrok URL when using ngrok
+            const baseUrl = 'http://127.0.0.1:8000'; // Change to https://YOUR_NGROK_URL.ngrok.io
             
             try {
                 document.getElementById('status').textContent = `Making ${callType} request...`;

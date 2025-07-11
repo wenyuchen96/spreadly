@@ -116,11 +116,12 @@
                     </div>
                 `;
                 
-                // Try HTTPS first, then HTTP as fallback
+                // Try ngrok HTTPS first, then local URLs as fallback
+                // Update the first URL to your ngrok URL: https://YOUR_NGROK_URL.ngrok.io
                 const backendUrls = [
+                    'http://127.0.0.1:8000', // Replace with: https://YOUR_NGROK_URL.ngrok.io
                     'https://127.0.0.1:8000',
                     'https://localhost:8000',
-                    'http://127.0.0.1:8000',
                     'http://localhost:8000'
                 ];
                 
