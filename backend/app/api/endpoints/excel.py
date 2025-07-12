@@ -161,6 +161,15 @@ async def query_spreadsheet(
     ai_service = AIService()
     result = await ai_service.process_natural_language_query(session.id, query)
     
+    # Check if result is raw JavaScript code (for financial models)
+    if isinstance(result, str) and 'Excel.run' in result:
+        print("🔍 Backend: Detected raw JavaScript financial model response")
+        return {
+            "session_token": session_token,
+            "query": query,
+            "result": result  # Return raw JavaScript code directly
+        }
+    
     return {
         "session_token": session_token,
         "query": query,

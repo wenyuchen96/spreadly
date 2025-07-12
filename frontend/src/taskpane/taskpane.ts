@@ -8,10 +8,8 @@
 // import { ExcelOperations } from '../scriptlab'; // Unused
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
 import { spreadlyAPI } from '../services/api';
-import { dialogAPI } from '../services/dialog-api';
-import { mockBackend } from '../services/mock-backend';
-import { getSelectedRangeData, getWorksheetData, getWorksheetInfo } from '../services/excel-data';
-import { testBackendConnection as serviceTestConnection, testFetchMethods } from '../services/test-connection';
+// Removed unused imports
+import { getSelectedRangeData } from '../services/excel-data';
 import { BASE_URL, getApiUrl } from '../config/api-config';
 
 Office.onReady((info) => {
@@ -77,11 +75,18 @@ function initializeChat() {
       addMessage(response.message, "assistant");
       
       // Execute code if generated
-      if (response.code) {
-        addMessage("🔄 Executing code...", "assistant", true);
+      console.log('🔍 Frontend: Checking for code execution...');
+      console.log('🔍 Frontend: response.code exists:', !!response.code, 'response.execute:', response.execute);
+      
+      if (response.code && response.execute) {
+        console.log('🔍 Frontend: Code found, executing...');
+        console.log('🔍 Frontend: Code preview:', response.code.substring(0, 100) + '...');
+        addMessage("🔄 Executing financial model in Excel...", "assistant", true);
         const result = await executeGeneratedCode(response.code, scriptLabEngine);
         removeLastMessage();
         addMessage(result, "assistant");
+      } else {
+        console.log('🔍 Frontend: No code to execute');
       }
     } catch (error) {
       removeLastMessage();
@@ -130,42 +135,11 @@ function initializeChat() {
   }
 }
 
-async function processUserMessage(message: string, engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
-  const lowerMessage = message.toLowerCase();
-  
-  // Special command: Test connection
-  if (lowerMessage.includes('test') && (lowerMessage.includes('connection') || lowerMessage.includes('backend'))) {
-    return await testBackendConnection();
-  }
-  
-  // Debug command: Test upload only
-  if (lowerMessage.includes('debug') && lowerMessage.includes('upload')) {
-    return await debugUpload();
-  }
-  
-  // Special command: Generate formulas
-  if (lowerMessage.includes('formula') || lowerMessage.includes('calculate')) {
-    return await generateFormula(message);
-  }
-  
-  // Fallback: Use formula endpoint for general chat if session fails
-  if (lowerMessage.includes('fallback') || lowerMessage.includes('simple')) {
-    return await generateFormula(message); // This works without sessions
-  }
-  
-  // Default: Direct AI chat via backend
+async function processUserMessage(message: string, engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string; execute?: boolean }> {
+  // Direct AI chat via backend
   return await chatWithAI(message, engine);
 }
 
-// Debug upload function
-async function debugUpload(): Promise<{ message: string }> {
-  try {
-    const uploadResponse = await spreadlyAPI.uploadExcelData([['Test', 'Data']], 'DebugTest');
-    return { message: `✅ **Upload Success!**\n\nSession: ${uploadResponse.session_token}\nMessage: ${uploadResponse.message}` };
-  } catch (error) {
-    return { message: `❌ **Upload Failed!**\n\nError: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
 
 // Test backend connection
 async function testBackendConnection(): Promise<{ message: string }> {
@@ -189,40 +163,9 @@ async function testBackendConnection(): Promise<{ message: string }> {
   }
 }
 
-// Generate Excel formulas using AI
-async function generateFormula(description: string): Promise<{ message: string }> {
-  try {
-    const params = new URLSearchParams({ description });
-    const response = await fetch(`${BASE_URL}/api/excel/formulas?${params}`, {
-      method: 'GET',
-      mode: 'cors',
-      headers: {
-        'ngrok-skip-browser-warning': 'true'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const data = await response.json();
-    let message = `## 📊 Formula Generated\n\n**Request:** ${data.description}\n\n`;
-    
-    data.formulas.forEach((formula: any, index: number) => {
-      message += `### Formula ${index + 1}: ${formula.difficulty}\n`;
-      message += `**Formula:** \`${formula.formula}\`\n`;
-      message += `**Description:** ${formula.description}\n`;
-      message += `**Example:** ${formula.example}\n\n`;
-    });
-    
-    return { message };
-  } catch (error) {
-    return { message: `❌ Formula generation failed: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
 
 // Direct AI chat with backend
-async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string }> {
+async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string; execute?: boolean }> {
   try {
     // First, get or create a session token
     let sessionToken = spreadlyAPI.getSessionToken();
@@ -263,8 +206,15 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     // Extract AI response
     let aiMessage = '';
     let generatedCode = null;
+    let executeCode = false;
     
-    if (data.result) {
+    // Check if response is raw JavaScript code (for financial models)
+    if (typeof data.result === 'string' && data.result.includes('Excel.run')) {
+      console.log('🔍 Frontend: Detected raw JavaScript financial model code');
+      generatedCode = data.result;
+      executeCode = true;
+      aiMessage = '✅ **Financial model generated successfully!**\n\nThe model code has been created and will be executed in your Excel spreadsheet.';
+    } else if (data.result) {
       if (data.result.answer) {
         aiMessage = data.result.answer;
       }
@@ -281,10 +231,8 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
         generatedCode = data.result.code;
       }
       
-      // Check if AI wants to execute code in Script Lab
-      if (data.result.execute_code || message.toLowerCase().includes('execute') || message.toLowerCase().includes('run code')) {
-        generatedCode = data.result.code || data.result.formula;
-      }
+      // Rely on the backend to tell us when to execute code.
+      executeCode = !!data.result.execute_code;
       
       if (data.result.next_steps && data.result.next_steps.length > 0) {
         aiMessage += `\n**Next Steps:**\n`;
@@ -298,7 +246,8 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     
     return { 
       message: aiMessage || '🤖 AI response received but was empty',
-      code: generatedCode
+      code: generatedCode,
+      execute: executeCode
     };
     
   } catch (error) {
@@ -310,522 +259,9 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
   }
 }
 
-async function processWithMockBackend(message: string): Promise<{ message: string; code?: string }> {
-  const lowerMessage = message.toLowerCase();
-  
-  try {
-    if (lowerMessage.includes('formula') || lowerMessage.includes('generate formula')) {
-      const description = message.replace(/mock|smart|ai demo|generate formula|formula/gi, '').trim() || 'calculate percentage';
-      
-      const response = await mockBackend.generateFormulas(description);
-      
-      let responseMessage = `🤖 **Smart AI Demo - Formula Generated:**\n\n`;
-      responseMessage += `**Request:** "${description}"\n\n`;
-      
-      response.formulas.forEach((formula, index) => {
-        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
-        responseMessage += `Formula: \`${formula.formula}\`\n`;
-        responseMessage += `Description: ${formula.description}\n`;
-        if (formula.example) {
-          responseMessage += `Example: ${formula.example}\n`;
-        }
-        responseMessage += `\n`;
-      });
-      
-      responseMessage += `*This is powered by our smart mock AI - realistic responses without network connectivity!*`;
-      
-      const firstFormula = response.formulas[0];
-      return { 
-        message: responseMessage, 
-        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
-      };
-    }
-    
-    if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
-      const analysis = await mockBackend.getAnalysis();
-      
-      let message = `🤖 **Smart AI Analysis:**\n\n`;
-      
-      message += `**Key Insights:**\n`;
-      analysis.analysis.insights.forEach((insight, index) => {
-        message += `${index + 1}. ${insight}\n`;
-      });
-      message += `\n`;
-      
-      message += `**Recommendations:**\n`;
-      analysis.analysis.suggestions.forEach((suggestion, index) => {
-        message += `${index + 1}. ${suggestion}\n`;
-      });
-      
-      message += `\n*Smart AI Demo - providing realistic analysis without backend connectivity!*`;
-      
-      return { message };
-    }
-    
-    if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
-      const worksheetData = await getWorksheetData();
-      const worksheetInfo = await getWorksheetInfo();
-      
-      const uploadResponse = await mockBackend.uploadData(worksheetData.data, worksheetInfo.activeSheet.name);
-      
-      const message = `🤖 **Smart AI Upload Complete:**\n\n` +
-        `📊 **Data Summary:**\n` +
-        `• File: ${worksheetInfo.activeSheet.name}\n` +
-        `• Rows: ${worksheetData.rowCount}\n` +
-        `• Columns: ${worksheetData.columnCount}\n` +
-        `• Session: ${uploadResponse.session_token.substring(0, 12)}...\n\n` +
-        `**Next Steps:**\n` +
-        `• Try "smart analyze" for AI insights\n` +
-        `• Ask "smart formula percentage" for formulas\n` +
-        `• Query your data with "smart [your question]"\n\n` +
-        `*Smart AI Demo - full functionality without network requirements!*`;
-      
-      return { message };
-    }
-    
-    // General query processing
-    const queryResponse = await mockBackend.processQuery(message);
-    
-    let responseMessage = `🤖 **Smart AI Response:**\n\n${queryResponse.result.answer}`;
-    
-    let code: string | undefined;
-    if (queryResponse.result.formula) {
-      responseMessage += `\n\n**Suggested Formula:** \`${queryResponse.result.formula}\``;
-      code = `DIRECT_INSERT_FORMULA:${queryResponse.result.formula}`;
-    }
-    
-    responseMessage += `\n\n*Smart AI Demo - providing intelligent responses without backend connectivity!*`;
-    
-    return { message: responseMessage, code };
-    
-  } catch (error) {
-    return { message: `❌ Smart AI error: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
+// Removed processWithMockBackend - no longer needed with direct AI integration
 
-async function processOfflineMessage(message: string): Promise<{ message: string; code?: string }> {
-  const lowerMessage = message.toLowerCase();
-  
-  // Try dialog API for specific commands
-  if (lowerMessage.includes('dialog api') || lowerMessage.includes('use dialog')) {
-    return await tryDialogApiCall(message);
-  }
-  
-  // Try direct API call for specific commands (bypass health check)
-  if (lowerMessage.includes('force api') || lowerMessage.includes('try backend')) {
-    return await tryDirectApiCall(message);
-  }
-  
-  // Use mock AI responses as fallback when backend unavailable
-  if (lowerMessage.includes('generate formula') || lowerMessage.includes('formula')) {
-    return await generateMockFormula(message);
-  }
-  
-  if (lowerMessage.includes('analyze') || lowerMessage.includes('analysis')) {
-    return await generateMockAnalysis();
-  }
-  
-  if (lowerMessage.includes('upload') || lowerMessage.includes('process data')) {
-    return await generateMockUpload();
-  }
-  
-  // Fallback to simple pattern matching when backend is unavailable
-  if (lowerMessage.includes('highlight') || lowerMessage.includes('color')) {
-    const color = extractColor(message) || 'yellow';
-    return {
-      message: `I'll highlight the selected cells with ${color} color.`,
-      code: `DIRECT_HIGHLIGHT:${color}`
-    };
-  }
-  
-  if (lowerMessage.includes('insert') && lowerMessage.includes('data')) {
-    const dataMatch = message.match(/\[\[.*?\]\]/);
-    if (dataMatch) {
-      try {
-        const data = JSON.parse(dataMatch[0]);
-        return {
-          message: `I'll insert the data into your spreadsheet starting at A1.`,
-          code: `DIRECT_INSERT_DATA:${JSON.stringify(data)}`
-        };
-      } catch (e) {
-        return {
-          message: "I couldn't parse the data format. Please use format like: [[1,2,3],[4,5,6]]"
-        };
-      }
-    }
-  }
-  
-  if (lowerMessage.includes('chart') || lowerMessage.includes('graph')) {
-    const range = extractRange(message) || 'A1:C5';
-    const chartType = extractChartType(message) || 'ColumnClustered';
-    return {
-      message: `I'll create a ${chartType} chart from range ${range}.`,
-      code: `DIRECT_CREATE_CHART:${range}:${chartType}`
-    };
-  }
-  
-  if (lowerMessage.includes('format') || lowerMessage.includes('style')) {
-    const range = extractRange(message) || 'A1:A1';
-    return {
-      message: `I'll format the range ${range} with blue background and bold text.`,
-      code: `DIRECT_FORMAT:${range}`
-    };
-  }
-  
-  if (lowerMessage.includes('debug simple') || lowerMessage.includes('quick test')) {
-    return {
-      message: "I'll do a quick connection test without iframe.",
-      code: "QUICK_CONNECTION_TEST"
-    };
-  }
-  
-  if (lowerMessage.includes('test connection') || lowerMessage.includes('debug connection')) {
-    return {
-      message: "I'll test the backend connection and show debug info in the console.",
-      code: "TEST_CONNECTION"
-    };
-  }
-  
-  if (lowerMessage.includes('test backend') || lowerMessage.includes('real test')) {
-    return {
-      message: `❌ Backend connection failed in offline mode. Make sure the FastAPI server is running at ${BASE_URL}`,
-    };
-  }
-  
-  if (lowerMessage.includes('test') || lowerMessage.includes('demo')) {
-    return {
-      message: "I'll run a simple test directly with Excel API (no iframe).",
-      code: "DIRECT_EXCEL_TEST"
-    };
-  }
-  
-  return {
-    message: `Backend AI is currently unavailable. I can still help with basic operations:
-    
-🔧 **Basic Operations:**
-• "highlight cells [color]" - to highlight selected cells
-• "insert data [[1,2],[3,4]]" - to insert data  
-• "create chart A1:C5" - to create charts
-• "format cells A1:B2" - to format cells
-• "test" - to run a demo
-
-🚀 **Try Backend Connection:**
-• "dialog api" - use dialog window method (recommended)
-• "dialog api formula percentage" - test formula generation via dialog
-• "force api" - attempt direct API call (likely blocked)
-
-Note: Excel Add-ins block direct network requests. Dialog method bypasses this.`
-  };
-}
-
-async function handleAnalysisRequest(): Promise<{ message: string; code?: string }> {
-  try {
-    // First upload current data if no session exists
-    if (!spreadlyAPI.getSessionToken()) {
-      const uploadResult = await handleDataUpload();
-      if (uploadResult.message.includes('Error')) {
-        return uploadResult;
-      }
-    }
-    
-    // Get AI analysis
-    const analysis = await spreadlyAPI.getAnalysis();
-    
-    let message = "🤖 **AI Analysis Results:**\n\n";
-    
-    if (analysis.analysis.insights) {
-      message += "**Key Insights:**\n";
-      analysis.analysis.insights.forEach((insight: string, index: number) => {
-        message += `${index + 1}. ${insight}\n`;
-      });
-      message += "\n";
-    }
-    
-    if (analysis.analysis.suggestions) {
-      message += "**Suggestions:**\n";
-      analysis.analysis.suggestions.forEach((suggestion: string, index: number) => {
-        message += `${index + 1}. ${suggestion}\n`;
-      });
-      message += "\n";
-    }
-    
-    if (analysis.analysis.formulas) {
-      message += "**Recommended Formulas:**\n";
-      analysis.analysis.formulas.forEach((formula: any, index: number) => {
-        message += `${index + 1}. ${formula.formula} - ${formula.description}\n`;
-      });
-    }
-    
-    return { message };
-  } catch (error) {
-    return { message: `❌ Error getting analysis: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
-async function handleDataUpload(): Promise<{ message: string; code?: string }> {
-  try {
-    // Get current worksheet data
-    const worksheetData = await getWorksheetData();
-    const worksheetInfo = await getWorksheetInfo();
-    
-    if (worksheetData.data.length === 0) {
-      return { message: "❌ No data found in the current worksheet. Please add some data first." };
-    }
-    
-    // Upload to backend
-    const result = await spreadlyAPI.uploadExcelData(
-      worksheetData.data, 
-      `${worksheetInfo.activeSheet.name}.xlsx`
-    );
-    
-    return { 
-      message: `✅ Data uploaded successfully!\n\n📊 **Data Summary:**\n• Range: ${worksheetData.range}\n• Rows: ${worksheetData.rowCount}\n• Columns: ${worksheetData.columnCount}\n• Session ID: ${result.session_token.substring(0, 8)}...\n\nYou can now ask me to "analyze" the data or ask questions about your spreadsheet!` 
-    };
-  } catch (error) {
-    return { message: `❌ Error uploading data: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
-async function tryDialogApiCall(message: string): Promise<{ message: string; code?: string }> {
-  try {
-    console.log('Attempting dialog API call...');
-    
-    // Try formula generation through dialog
-    if (message.includes('formula')) {
-      const description = message.replace(/dialog api|use dialog|formula/gi, '').trim() || 'calculate percentage';
-      
-      const response = await dialogAPI.generateFormulas(description);
-      
-      let responseMessage = `🎉 **Dialog API Success!** Generated formulas for: "${description}"\n\n`;
-      
-      response.formulas.forEach((formula: any, index: number) => {
-        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
-        responseMessage += `Formula: \`${formula.formula}\`\n`;
-        responseMessage += `Description: ${formula.description}\n\n`;
-      });
-      
-      const firstFormula = response.formulas[0];
-      return { 
-        message: responseMessage, 
-        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
-      };
-    }
-    
-    // Try health check through dialog
-    const healthCheck = await dialogAPI.healthCheck();
-    return { 
-      message: healthCheck 
-        ? `🎉 **Dialog API Success!** Backend is accessible through dialog method!`
-        : `❌ Dialog API health check failed. Backend may not be running.`
-    };
-  } catch (error) {
-    return { 
-      message: `❌ Dialog API error: ${error instanceof Error ? error.message : 'Unknown error'}\n\nThis method opens a dialog window to bypass Excel's network restrictions.` 
-    };
-  }
-}
-
-async function tryDirectApiCall(message: string): Promise<{ message: string; code?: string }> {
-  try {
-    console.log('Attempting direct API call...');
-    
-    // Try formula generation as a test
-    if (message.includes('formula')) {
-      const description = message.replace(/force api|try backend|formula/gi, '').trim() || 'calculate percentage';
-      
-      const response = await spreadlyAPI.generateFormulas(description);
-      
-      let responseMessage = `🎉 **Direct API Success!** Generated formulas for: "${description}"\n\n`;
-      
-      response.formulas.forEach((formula, index) => {
-        responseMessage += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
-        responseMessage += `Formula: \`${formula.formula}\`\n`;
-        responseMessage += `Description: ${formula.description}\n\n`;
-      });
-      
-      const firstFormula = response.formulas[0];
-      return { 
-        message: responseMessage, 
-        code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
-      };
-    }
-    
-    // Try a simple health check
-    const response = await fetch(getApiUrl('health'));
-    if (response.ok) {
-      const data = await response.json();
-      return { 
-        message: `🎉 **Direct API Success!** Backend is responding: ${JSON.stringify(data)}` 
-      };
-    } else {
-      return { 
-        message: `❌ Direct API call failed with status: ${response.status}` 
-      };
-    }
-  } catch (error) {
-    return { 
-      message: `❌ Direct API error: ${error instanceof Error ? error.message : 'Unknown error'}\n\nThe Excel Add-in environment likely blocks external network requests for security.` 
-    };
-  }
-}
-
-// Mock AI functions that simulate backend responses
-async function generateMockFormula(message: string): Promise<{ message: string; code?: string }> {
-  try {
-    // Extract what kind of formula they want
-    const description = message.toLowerCase();
-    
-    let formula = "SUM(A1:A10)";
-    let explanation = "Calculates the sum of values in range A1:A10";
-    
-    if (description.includes('percentage') || description.includes('percent')) {
-      formula = "=(B2-A2)/A2*100";
-      explanation = "Calculates percentage change between two values";
-    } else if (description.includes('average') || description.includes('mean')) {
-      formula = "=AVERAGE(A1:A10)";
-      explanation = "Calculates the average of values in range A1:A10";
-    } else if (description.includes('count')) {
-      formula = "=COUNTA(A1:A10)";
-      explanation = "Counts non-empty cells in range A1:A10";
-    } else if (description.includes('max') || description.includes('maximum')) {
-      formula = "=MAX(A1:A10)";
-      explanation = "Finds the maximum value in range A1:A10";
-    } else if (description.includes('min') || description.includes('minimum')) {
-      formula = "=MIN(A1:A10)";
-      explanation = "Finds the minimum value in range A1:A10";
-    } else if (description.includes('growth') || description.includes('change')) {
-      formula = "=((B2-A2)/A2)*100";
-      explanation = "Calculates growth rate as a percentage";
-    }
-    
-    const responseMessage = `🤖 **AI Formula Generated:**
-
-**Formula:** \`${formula}\`
-**Description:** ${explanation}
-
-**Usage Tips:**
-• Click to insert this formula into the selected cell
-• Adjust cell references (A1, B2, etc.) as needed
-• This formula will calculate automatically when cell values change
-
-*Note: This is a demo AI response. In production, this would be powered by Claude AI through the backend.*`;
-
-    return {
-      message: responseMessage,
-      code: `DIRECT_INSERT_FORMULA:${formula}`
-    };
-  } catch (error) {
-    return { message: `❌ Error generating formula: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
-async function generateMockAnalysis(): Promise<{ message: string; code?: string }> {
-  try {
-    // Get current worksheet data for analysis
-    const worksheetData = await getWorksheetData();
-    
-    let analysisMessage = `🤖 **AI Analysis Results:**
-
-📊 **Data Summary:**
-• Spreadsheet Range: ${worksheetData.range}
-• Total Rows: ${worksheetData.rowCount}
-• Total Columns: ${worksheetData.columnCount}
-• Data Types: ${worksheetData.dataTypes.join(', ')}
-
-🔍 **Key Insights:**
-• Your data appears to be ${worksheetData.hasHeaders ? 'well-structured with headers' : 'numeric data without headers'}
-• Consider adding charts to visualize trends
-• Look for outliers in numeric columns
-• Validate data consistency across rows
-
-💡 **Recommendations:**
-• Use conditional formatting to highlight important values
-• Create pivot tables for data summarization
-• Apply data validation to ensure accuracy
-• Consider using formulas for calculated fields
-
-*Note: This is a demo AI analysis. In production, Claude AI would provide much more detailed insights based on actual data content.*`;
-
-    return { message: analysisMessage };
-  } catch (error) {
-    return { message: `❌ Error analyzing data: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
-async function generateMockUpload(): Promise<{ message: string; code?: string }> {
-  try {
-    const worksheetData = await getWorksheetData();
-    const worksheetInfo = await getWorksheetInfo();
-    
-    const responseMessage = `✅ **Mock Data Upload Successful!**
-
-📄 **File Info:**
-• Sheet Name: ${worksheetInfo.activeSheet.name}
-• Data Range: ${worksheetData.range}
-• Rows: ${worksheetData.rowCount}
-• Columns: ${worksheetData.columnCount}
-
-🤖 **AI Processing Complete:**
-• Data structure analyzed
-• Statistical summary generated
-• Ready for AI queries and insights
-
-**Try these commands:**
-• "analyze" - Get detailed AI insights
-• "generate formula percentage" - Create custom formulas
-• Ask questions about your data
-
-*Note: This is a demo upload. In production, your data would be securely processed by Claude AI through the backend API.*`;
-
-    return { message: responseMessage };
-  } catch (error) {
-    return { message: `❌ Error uploading data: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
-async function handleFormulaGeneration(message: string): Promise<{ message: string; code?: string }> {
-  try {
-    // Extract the formula description from the message
-    const description = message.replace(/generate formula|formula|create formula/gi, '').trim();
-    
-    if (!description) {
-      return { message: "Please specify what kind of formula you need. For example: 'generate formula to calculate percentage growth'" };
-    }
-    
-    // Get current worksheet context for better formula generation
-    let context = "";
-    try {
-      const worksheetData = await getWorksheetData();
-      context = `Worksheet has ${worksheetData.rowCount} rows and ${worksheetData.columnCount} columns. Data types: ${worksheetData.dataTypes.join(', ')}.`;
-    } catch (e) {
-      // Continue without context if worksheet data can't be read
-    }
-    
-    const response = await spreadlyAPI.generateFormulas(description, context);
-    
-    let message = `🧮 **Generated Formulas for:** "${description}"\n\n`;
-    
-    response.formulas.forEach((formula, index) => {
-      message += `**${index + 1}. ${formula.difficulty.toUpperCase()}**\n`;
-      message += `Formula: \`${formula.formula}\`\n`;
-      message += `Description: ${formula.description}\n`;
-      if (formula.example) {
-        message += `Example: ${formula.example}\n`;
-      }
-      message += "\n";
-    });
-    
-    // Return the first formula as executable code
-    const firstFormula = response.formulas[0];
-    return { 
-      message, 
-      code: firstFormula ? `DIRECT_INSERT_FORMULA:${firstFormula.formula}` : undefined 
-    };
-  } catch (error) {
-    return { message: `❌ Error generating formulas: ${error instanceof Error ? error.message : 'Unknown error'}` };
-  }
-}
-
+// Core code execution function
 async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
   try {
     // Handle all direct Excel operations
@@ -854,7 +290,16 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
 // Execute Excel script code (for financial models, data manipulation, etc.)
 async function executeExcelScriptCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
   try {
-    // Wrap the code in a proper Excel.run context if it's not already
+    console.log('🔍 Attempting Script Lab execution...');
+    
+    // Pre-execution validation
+    const validationResult = validateGeneratedCode(code);
+    if (!validationResult.isValid) {
+      console.warn('🚨 Code validation failed:', validationResult.errors);
+      return `❌ **Code validation failed**\n\n${validationResult.errors.join('\n')}\n\nTry asking for the model again to get different code.`;
+    }
+    
+    // Try Script Lab first
     let wrappedCode = code;
     if (!code.includes("Excel.run")) {
       wrappedCode = `
@@ -866,10 +311,10 @@ await Excel.run(async (context) => {
     }
     
     const snippet = engine.createSnippet(
-      'AI Financial Model Code',
+      'AI Generated Financial Model',
       wrappedCode,
-      '<div id="output">Executing financial model...</div>',
-      'body { padding: 10px; font-family: monospace; }'
+      '<div id="output">Creating financial model in your spreadsheet...</div>',
+      'body { padding: 10px; font-family: monospace; color: #2d3748; }'
     );
     
     const result = await engine.executeSnippet(snippet);
@@ -877,10 +322,101 @@ await Excel.run(async (context) => {
     if (result.success) {
       return `✅ **Financial model executed successfully!**\n\n${result.result || 'Excel operations completed.'}`;
     } else {
-      return `❌ **Financial model execution failed:**\n\n${result.error}`;
+      console.log('🔍 Script Lab failed, trying direct execution...');
+      return await executeDirectExcel(code);
     }
   } catch (error) {
-    return `❌ Error executing financial model: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    console.log('🔍 Script Lab error, trying direct execution...', error);
+    return await executeDirectExcel(code);
+  }
+}
+
+// Validate generated code before execution
+function validateGeneratedCode(code: string): { isValid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  // Check for unsupported APIs
+  const unsupportedAPIs = [
+    'getCell(',
+    'borders.setItem',
+    'setItem(',
+    'border.style',
+    'outline.',
+    'Table.'  // Tables can be problematic in web Excel
+  ];
+  
+  unsupportedAPIs.forEach(api => {
+    if (code.includes(api)) {
+      errors.push(`❌ Unsupported API detected: ${api} (not available in web Excel)`);
+    }
+  });
+  
+  // Check for proper Excel.run wrapper
+  if (!code.includes('Excel.run') && !code.includes('context.workbook')) {
+    errors.push(`⚠️ Code should use Excel.run() wrapper for proper execution`);
+  }
+  
+  // Check for potential dimension mismatches in array assignments
+  const rangeValuePattern = /getRange\("([^"]+)"\)\.values\s*=\s*(\[.*?\])/g;
+  let match: RegExpExecArray | null;
+  while ((match = rangeValuePattern.exec(code)) !== null) {
+    const range = match[1];
+    const arrayStr = match[2];
+    
+    // Simple dimension check for common patterns
+    if (range.includes(':')) {
+      const [start, end] = range.split(':');
+      if (start.length === 2 && end.length === 2) { // Like A1:C1
+        const colDiff = end.charCodeAt(0) - start.charCodeAt(0) + 1;
+        const rowDiff = parseInt(end.slice(1)) - parseInt(start.slice(1)) + 1;
+        
+        // Count array dimensions (simple check)
+        const outerArrays = (arrayStr.match(/\[/g) || []).length - 1;
+        if (outerArrays > 0 && (colDiff > 1 || rowDiff > 1)) {
+          // This is a multi-cell range, warn about potential dimension issues
+          console.warn(`🔍 Dimension check: Range ${range} expects ${rowDiff}x${colDiff}, found ${outerArrays} array levels`);
+        }
+      }
+    }
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+// Fallback: Direct Excel execution for web Excel compatibility
+async function executeDirectExcel(code: string): Promise<string> {
+  try {
+    console.log('🔍 Executing code directly in Excel...');
+    
+    // Execute the code directly without iframe
+    const wrappedCode = code.includes("Excel.run") ? code : `
+await Excel.run(async (context) => {
+  ${code}
+  await context.sync();
+});
+`;
+    
+    // Use eval to execute the code directly (risky but necessary for web Excel)
+    await eval(`(async () => { ${wrappedCode} })()`);
+    
+    return `✅ **Financial model created successfully!**\n\nThe NPV model has been added to your spreadsheet. Check your current worksheet for the new financial model with formulas and formatting.`;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('🚨 Direct execution error:', errorMessage);
+    
+    // Check for common dimension errors and provide helpful guidance
+    if (errorMessage.includes('number of rows or columns') || errorMessage.includes('dimensions of the range')) {
+      return `❌ **Array dimension mismatch error**\n\nThe generated code tried to set data arrays that don't match Excel range sizes. This is a common issue with dynamically generated code.\n\n**Solutions:**\n• Try asking for the model again (AI will generate different code)\n• Use desktop Excel for better API support\n• Ask for a simpler model structure\n\n**Technical details:** ${errorMessage}`;
+    }
+    
+    if (errorMessage.includes('getCell is not a function')) {
+      return `❌ **API compatibility issue**\n\nThe generated code uses Excel APIs that may not be available in web Excel.\n\n**Solutions:**\n• Try using desktop Excel for full API support\n• Ask for the model again (AI may generate different code)\n\n**Technical details:** ${errorMessage}`;
+    }
+    
+    return `❌ **Direct execution failed:**\n\n${errorMessage}\n\nThis might be due to web Excel security restrictions or API limitations. Try using desktop Excel for full Script Lab support.`;
   }
 }
 
@@ -1056,19 +592,9 @@ async function executeTestConnection(): Promise<string> {
   try {
     console.log('=== Starting Connection Test ===');
     
-    // Test basic connection
-    const workingUrl = await serviceTestConnection();
-    
-    if (workingUrl) {
-      console.log(`Found working URL: ${workingUrl}`);
-      
-      // Test different fetch methods with the working URL
-      const workingConfig = await testFetchMethods(workingUrl);
-      
-      return `✅ Connection test completed! Check the Console (F12) for detailed results.\n\nWorking URL: ${workingUrl}\nConfiguration: ${workingConfig ? JSON.stringify(workingConfig) : 'Default'}`;
-    } else {
-      return `❌ Connection test failed! Check the Console (F12) for detailed error messages.\n\nPossible issues:\n• Backend not running on ${BASE_URL}\n• CORS restrictions in Excel Add-in environment\n• Network connectivity issues\n\nTry opening ${getApiUrl('health')} in your browser to verify the backend is working.`;
-    }
+    // Simple connection test using our testBackendConnection function
+    const result = await testBackendConnection();
+    return result.message;
   } catch (error) {
     return `❌ Connection test error: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
@@ -1129,35 +655,6 @@ async function executeDirectExcelTest(): Promise<string> {
   } catch (error) {
     return `❌ Direct Excel test failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
-}
-
-// Helper functions for parsing user input
-function extractColor(message: string): string | null {
-  const colorMatch = message.match(/(red|blue|green|yellow|orange|purple|pink|cyan|magenta|lime|brown|gray|grey|black|white)/i);
-  return colorMatch ? colorMatch[1] : null;
-}
-
-function extractRange(message: string): string | null {
-  const rangeMatch = message.match(/[A-Z]+\d+:[A-Z]+\d+/i);
-  return rangeMatch ? rangeMatch[0].toUpperCase() : null;
-}
-
-function extractChartType(message: string): string | null {
-  const chartTypes: { [key: string]: string } = {
-    'column': 'ColumnClustered',
-    'bar': 'BarClustered',
-    'line': 'Line',
-    'pie': 'Pie',
-    'scatter': 'XYScatter',
-    'area': 'Area'
-  };
-  
-  for (const [keyword, chartType] of Object.entries(chartTypes)) {
-    if (message.toLowerCase().includes(keyword)) {
-      return chartType;
-    }
-  }
-  return null;
 }
 
 export async function run() {
