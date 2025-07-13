@@ -4,6 +4,8 @@ from typing import List, Dict, Any
 from app.core.database import get_db
 from app.services.excel_service import ExcelService
 from app.services.ai_service_simple import AIService
+from app.services.model_vector_store import get_vector_store
+from app.services.model_curator import get_model_curator
 from app.models.session import Session as SessionModel
 from app.models.spreadsheet import Spreadsheet
 import uuid
@@ -210,3 +212,68 @@ async def search_patterns(
         "query": query,
         "patterns": patterns
     }
+
+@router.get("/rag/status")
+async def rag_status():
+    """Get RAG system status and statistics"""
+    try:
+        vector_store = get_vector_store()
+        stats = vector_store.get_stats()
+        
+        return {
+            "rag_enabled": vector_store.is_available(),
+            "vector_store_stats": stats,
+            "status": "operational" if vector_store.is_available() else "unavailable"
+        }
+    except Exception as e:
+        return {
+            "rag_enabled": False,
+            "error": str(e),
+            "status": "error"
+        }
+
+@router.post("/rag/initialize")
+async def initialize_rag_library():
+    """Initialize RAG library with professional model templates"""
+    try:
+        vector_store = get_vector_store()
+        
+        if not vector_store.is_available():
+            raise HTTPException(
+                status_code=503, 
+                detail="Vector store not available. Make sure RAG dependencies are installed."
+            )
+        
+        model_curator = get_model_curator()
+        results = await model_curator.initialize_model_library()
+        
+        return {
+            "status": "success",
+            "message": f"Initialized RAG library with {results['total_added']} models",
+            "details": results
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error initializing RAG library: {str(e)}")
+
+@router.delete("/rag/reset")
+async def reset_rag_library():
+    """Reset RAG library (development use only)"""
+    try:
+        vector_store = get_vector_store()
+        
+        if not vector_store.is_available():
+            raise HTTPException(
+                status_code=503, 
+                detail="Vector store not available"
+            )
+        
+        await vector_store.reset_store()
+        
+        return {
+            "status": "success",
+            "message": "RAG library reset successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error resetting RAG library: {str(e)}")

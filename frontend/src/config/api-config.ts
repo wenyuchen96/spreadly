@@ -21,7 +21,7 @@
  */
 
 // CHANGE THIS TO YOUR NGROK URL:
-export const BASE_URL = 'https://2df4fc01760f.ngrok-free.app';
+export const BASE_URL = 'https://c9c26ea399f4.ngrok-free.app';
 
 // Fallback to localhost if ngrok is down:
 // export const BASE_URL = process.env.BACKEND_URL || 'http://127.0.0.1:8000';

@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     PINECONE_ENVIRONMENT: str
     PINECONE_INDEX_NAME: str
     
+    # RAG Configuration
+    VECTOR_STORE_TYPE: str = "chromadb"  # Options: chromadb, pinecone, weaviate
+    CHROMA_DB_PATH: str = "./chroma_db"
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    RAG_ENABLED: bool = True
+    MAX_RETRIEVED_MODELS: int = 5
+    SIMILARITY_THRESHOLD: float = 0.7
+    
     # Security
     SECRET_KEY: str
     ALGORITHM: str

@@ -11,3 +11,6 @@ pandas==2.1.4
 openpyxl==3.1.2
 aiofiles==23.2.1
 httpx==0.25.2
+# RAG Dependencies
+chromadb==0.4.22
+sentence-transformers==2.2.2
