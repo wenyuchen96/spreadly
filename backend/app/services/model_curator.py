@@ -93,21 +93,23 @@ class ModelCurator:
             complexity=ComplexityLevel.ADVANCED,
             excel_code='''
 await Excel.run(async (context) => {
+    // STAGE 1: Sheet Setup
     const sheet = context.workbook.worksheets.getActiveWorksheet();
     
-    // HEADER
+    // STAGE 2: Main Header
     sheet.getRange("A1").values = [["TECHNOLOGY COMPANY DCF VALUATION MODEL"]];
     sheet.getRange("A1").format.font.bold = true;
     sheet.getRange("A1").format.font.size = 16;
     sheet.getRange("A1").format.fill.color = "#2F4F4F";
     sheet.getRange("A1").format.font.color = "#FFFFFF";
     
-    // ASSUMPTIONS SECTION
+    // STAGE 3: Assumptions Section Header
     sheet.getRange("A3").values = [["KEY ASSUMPTIONS"]];
     sheet.getRange("A3:F3").format.fill.color = "#4472C4";
     sheet.getRange("A3:F3").format.font.bold = true;
     sheet.getRange("A3:F3").format.font.color = "#FFFFFF";
     
+    // STAGE 4: Assumptions Data
     sheet.getRange("A4:B12").values = [
         ["Revenue Growth Rate (Y1-3)", "25%"],
         ["Revenue Growth Rate (Y4-5)", "15%"],
@@ -121,13 +123,13 @@ await Excel.run(async (context) => {
     ];
     sheet.getRange("B4:B12").format.fill.color = "#E7F3FF";
     
-    // PROJECTION YEARS
+    // STAGE 5: Projection Headers
     sheet.getRange("H3:M3").values = [["Year", "1", "2", "3", "4", "5"]];
     sheet.getRange("H3:M3").format.font.bold = true;
     sheet.getRange("H3:M3").format.fill.color = "#4472C4";
     sheet.getRange("H3:M3").format.font.color = "#FFFFFF";
     
-    // REVENUE PROJECTIONS
+    // STAGE 6: Revenue Projection Formulas
     sheet.getRange("H4:M8").values = [
         ["Revenue", "100000", "=I4*(1+$B$4)", "=J4*(1+$B$4)", "=K4*(1+$B$5)", "=L4*(1+$B$5)"],
         ["Revenue Growth %", "=($B$4)", "=($B$4)", "=($B$4)", "=($B$5)", "=($B$5)"],
@@ -136,7 +138,7 @@ await Excel.run(async (context) => {
         ["EBIT", "=I6-I7", "=J6-J7", "=K6-K7", "=L6-L7", "=M6-M7"]
     ];
     
-    // FREE CASH FLOW CALCULATION
+    // STAGE 7: Free Cash Flow Formulas
     sheet.getRange("H10:M15").values = [
         ["Tax", "=I8*$B$8", "=J8*$B$8", "=K8*$B$8", "=L8*$B$8", "=M8*$B$8"],
         ["NOPAT", "=I8-I10", "=J8-J10", "=K8-K10", "=L8-L10", "=M8-M10"],
@@ -146,14 +148,14 @@ await Excel.run(async (context) => {
         ["Free Cash Flow", "=SUM(I11:I14)", "=SUM(J11:J14)", "=SUM(K11:K14)", "=SUM(L11:L14)", "=SUM(M11:M14)"]
     ];
     
-    // TERMINAL VALUE
+    // STAGE 8: Terminal Value Calculations
     sheet.getRange("H17:I19").values = [
         ["Terminal FCF", "=M15*(1+$B$6)"],
         ["Terminal Value", "=I17/($B$9-$B$6)"],
         ["PV of Terminal Value", "=I18/POWER(1+$B$9,5)"]
     ];
     
-    // VALUATION
+    // STAGE 9: Valuation Summary
     sheet.getRange("A17:B22").values = [
         ["VALUATION SUMMARY", ""],
         ["PV of FCF (Y1-5)", "=NPV($B$9,I15:M15)"],
@@ -162,10 +164,10 @@ await Excel.run(async (context) => {
         ["Less: Net Debt", "0"],
         ["Equity Value", "=B20-B21"]
     ];
+    
+    // STAGE 10: Final Formatting
     sheet.getRange("A17:B22").format.fill.color = "#D4EDDA";
     sheet.getRange("A17:A22").format.font.bold = true;
-    
-    // FORMATTING
     sheet.getRange("I4:M22").format.numberFormat = "$#,##0";
     sheet.getRange("B4:B6").format.numberFormat = "0%";
     sheet.getRange("I5:M5").format.numberFormat = "0%";

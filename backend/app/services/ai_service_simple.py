@@ -311,6 +311,29 @@ class AIService:
                 - Count brackets: values = [[ ]] has TWO opening brackets
                 - Match array size to range: A1:C1 needs [["a", "b", "c"]] (1 row, 3 cols)
                 
+                🔄 SEQUENTIAL EXECUTION OPTIMIZATION:
+                - Add clear comment markers for operation stages: // STAGE 1: Setup, // STAGE 2: Data, etc.
+                - Group related operations together in logical blocks
+                - Use descriptive comments before each major operation
+                - Separate sheet setup, data entry, formulas, and formatting into distinct sections
+                - Example structure:
+                  ```
+                  // STAGE 1: Sheet Setup
+                  const sheet = context.workbook.worksheets.getActiveWorksheet();
+                  
+                  // STAGE 2: Headers
+                  sheet.getRange("A1").values = [["Header"]];
+                  
+                  // STAGE 3: Data
+                  sheet.getRange("A2").values = [["Data"]];
+                  
+                  // STAGE 4: Formulas
+                  sheet.getRange("A3").formulas = [["=A2*2"]];
+                  
+                  // STAGE 5: Formatting
+                  sheet.getRange("A1").format.font.bold = true;
+                  ```
+                
                 FINANCIAL MODELING BEST PRACTICES (INDUSTRY STANDARD):
                 
                 📋 CORE MODELING PRINCIPLES:
@@ -420,6 +443,29 @@ class AIService:
                 - EVERY .formulas assignment must use 2D arrays: [[...]]  
                 - Count brackets: values = [[ ]] has TWO opening brackets
                 - Match array size to range: A1:C1 needs [["a", "b", "c"]] (1 row, 3 cols)
+                
+                🔄 SEQUENTIAL EXECUTION OPTIMIZATION:
+                - Add clear comment markers for operation stages: // STAGE 1: Setup, // STAGE 2: Data, etc.
+                - Group related operations together in logical blocks
+                - Use descriptive comments before each major operation
+                - Separate sheet setup, data entry, formulas, and formatting into distinct sections
+                - Example structure:
+                  ```
+                  // STAGE 1: Sheet Setup
+                  const sheet = context.workbook.worksheets.getActiveWorksheet();
+                  
+                  // STAGE 2: Headers
+                  sheet.getRange("A1").values = [["Header"]];
+                  
+                  // STAGE 3: Data
+                  sheet.getRange("A2").values = [["Data"]];
+                  
+                  // STAGE 4: Formulas
+                  sheet.getRange("A3").formulas = [["=A2*2"]];
+                  
+                  // STAGE 5: Formatting
+                  sheet.getRange("A1").format.font.bold = true;
+                  ```
                 
                 EXCEL OPERATION GUIDELINES:
                 📝 For formulas: Use .formulas = [["=FORMULA"]] format

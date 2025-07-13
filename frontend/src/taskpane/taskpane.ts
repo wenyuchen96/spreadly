@@ -37,6 +37,7 @@ import { spreadlyAPI } from '../services/api';
 // Removed unused imports
 import { getSelectedRangeData } from '../services/excel-data';
 import { BASE_URL, getApiUrl } from '../config/api-config';
+import { SequentialExecutionEngine, ExecutionConfig, ExecutionProgress } from '../utils/SequentialExecutionEngine';
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -52,6 +53,9 @@ function initializeChat() {
   const chatMessages = document.getElementById("chat-messages") as HTMLDivElement;
   // Use SimpleEngine for testing (fallback without TypeScript compilation issues)
   const scriptLabEngine = new SimpleScriptLabEngine();
+  
+  // Sequential execution configuration (enabled by default for better stability)
+  let useSequentialExecution = true;
 
   // Auto-resize textarea
   chatInput.addEventListener("input", () => {
@@ -302,7 +306,7 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
     
     // Handle JavaScript/TypeScript code for financial models
     if (code.includes("Excel.run") || code.includes("context.workbook") || code.includes("worksheet")) {
-      return await executeExcelScriptCode(code, engine);
+      return await executeExcelScriptCode(code, engine, true); // Enable sequential execution by default
     }
     
     // Handle general JavaScript code
@@ -314,8 +318,14 @@ async function executeGeneratedCode(code: string, engine: SimpleScriptLabEngine)
 }
 
 // Execute Excel script code (for financial models, data manipulation, etc.)
-async function executeExcelScriptCode(code: string, engine: SimpleScriptLabEngine): Promise<string> {
+async function executeExcelScriptCode(code: string, engine: SimpleScriptLabEngine, useSequential: boolean = true): Promise<string> {
   try {
+    // For financial models, prefer sequential execution for better stability
+    if (useSequential && (code.includes('DCF') || code.includes('Financial') || code.includes('model') || code.length > 2000)) {
+      console.log('🔄 Using sequential execution for financial model...');
+      return await executeSequentialExcel(code, true);
+    }
+    
     console.log('🔍 Attempting Script Lab execution...');
     console.log('🔍 Original code length:', code.length);
     console.log('🔍 Original code preview:', code.substring(0, 200) + '...');
@@ -453,12 +463,12 @@ await Excel.run(async (context) => {
     if (result.success) {
       return `✅ **Financial model executed successfully!**\n\n${result.result || 'Excel operations completed.'}`;
     } else {
-      console.log('🔍 Script Lab failed, trying direct execution...');
-      return await executeDirectExcel(code);
+      console.log('🔍 Script Lab failed, trying sequential execution...');
+      return await executeSequentialExcel(code, true);
     }
   } catch (error) {
-    console.log('🔍 Script Lab error, trying direct execution...', error);
-    return await executeDirectExcel(code);
+    console.log('🔍 Script Lab error, trying sequential execution...', error);
+    return await executeSequentialExcel(code, true);
   }
 }
 
@@ -2175,6 +2185,82 @@ function validateGeneratedCodeLegacy(code: string): { isValid: boolean; errors: 
     warnings,
     fixableIssues
   };
+}
+
+// Sequential execution for improved stability and error handling
+async function executeSequentialExcel(code: string, useSequential: boolean = true): Promise<string> {
+  if (!useSequential) {
+    return executeDirectExcel(code);
+  }
+
+  try {
+    console.log('🔄 Starting sequential execution...');
+    
+    // Create sequential execution engine with progress tracking
+    const sequentialEngine = new SequentialExecutionEngine({
+      strategy: 'default',
+      continueOnError: true,
+      validateEachStage: true,
+      progressCallback: (progress: ExecutionProgress) => {
+        console.log(`📊 Progress: Stage ${progress.currentStage}/${progress.totalStages}, Operations: ${progress.operationsCompleted}/${progress.totalOperations}`);
+        
+        // Update UI with progress (optional)
+        const statusElement = document.getElementById('execution-status');
+        if (statusElement) {
+          statusElement.textContent = `Executing: ${progress.currentOperation} (${progress.operationsCompleted}/${progress.totalOperations})`;
+        }
+      }
+    });
+
+    // Parse the monolithic code into sequential operations
+    const operations = sequentialEngine.parseCodeIntoOperations(code, 'Financial Model');
+    console.log(`🔍 Parsed ${operations.length} operations`);
+
+    // Execute operations sequentially
+    const results = await sequentialEngine.executeOperations(operations);
+    
+    // Get execution statistics
+    const stats = sequentialEngine.getExecutionStats();
+    console.log('📊 Execution stats:', stats);
+
+    // Generate result message based on success rate
+    if (stats.successRate >= 0.9) {
+      return `✅ **Financial model created successfully!** 
+
+📊 **Execution Summary:**
+- Operations completed: ${stats.successful}/${stats.totalOperations}
+- Success rate: ${(stats.successRate * 100).toFixed(1)}%
+- Total time: ${stats.totalTime}ms
+- Average operation time: ${stats.averageOperationTime.toFixed(1)}ms
+
+The model has been built using sequential execution for maximum reliability. Each operation was validated before proceeding to the next stage.`;
+    
+    } else if (stats.successRate >= 0.7) {
+      return `⚠️ **Financial model partially completed**
+
+📊 **Execution Summary:**
+- Operations completed: ${stats.successful}/${stats.totalOperations}
+- Success rate: ${(stats.successRate * 100).toFixed(1)}%
+- Failed operations: ${stats.failed}
+
+The model was created with some operations failing. The sequential approach isolated failures to prevent complete breakdown. Check your worksheet for the partial model.`;
+    
+    } else {
+      return `❌ **Financial model creation encountered significant issues**
+
+📊 **Execution Summary:**
+- Operations completed: ${stats.successful}/${stats.totalOperations}
+- Success rate: ${(stats.successRate * 100).toFixed(1)}%
+- Failed operations: ${stats.failed}
+
+Sequential execution prevented complete failure, but too many operations failed. Consider trying a simpler model or checking for data/formula conflicts.`;
+    }
+
+  } catch (error) {
+    console.error('🚨 Sequential execution error:', error);
+    console.log('🔄 Falling back to direct execution...');
+    return executeDirectExcel(code);
+  }
 }
 
 // Fallback: Direct Excel execution for web Excel compatibility
