@@ -37,6 +37,21 @@ import { spreadlyAPI } from '../services/api';
 // Removed unused imports
 import { getSelectedRangeData, getComprehensiveWorkbookData, getLightweightWorkbookContext, getActiveSheetDataReliably, type ComprehensiveWorkbookData } from '../services/excel-data';
 import { BASE_URL, getApiUrl } from '../config/api-config';
+
+// Global variables for request cancellation and progress
+let currentAbortController: AbortController | null = null;
+
+// Interface for AI response with optional token information
+interface AIResponse {
+  message: string;
+  code?: string;
+  execute?: boolean;
+  tokenInfo?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
+}
 // Removed: Sequential execution replaced by incremental execution
 // import { SequentialExecutionEngine, ExecutionConfig, ExecutionProgress } from '../utils/SequentialExecutionEngine';
 import { IncrementalExecutor, shouldUseIncrementalBuild, extractModelType, ChunkInfo, ExecutionProgress as IncrementalProgress } from '../utils/IncrementalExecutor';
@@ -93,37 +108,124 @@ function initializeChat() {
     chatInput.style.height = "auto";
     sendButton.disabled = true;
 
-    // Show typing indicator
-    addMessage("Processing your request...", "assistant", true);
+    // Create abort controller for this request
+    currentAbortController = new AbortController();
+    
+    // Show dynamic progress indicator with task detection
+    currentProgressIndicator = new DynamicProgressIndicator();
+    const taskType = detectTaskType(message);
+    currentProgressIndicator.show(taskType);
 
     try {
       // Process the user message and generate appropriate response
       const response = await processUserMessage(message, scriptLabEngine);
       
-      // Remove typing indicator
-      removeLastMessage();
-      
-      // Add actual response
-      addMessage(response.message, "assistant");
-      
-      // Execute code if generated
-      console.log('🔍 Frontend: Checking for code execution...');
-      console.log('🔍 Frontend: response.code exists:', !!response.code, 'response.execute:', response.execute);
-      
-      if (response.code && response.execute) {
-        console.log('🔍 Frontend: Code found, executing...');
-        console.log('🔍 Frontend: Code preview:', response.code.substring(0, 100) + '...');
-        addMessage("🔄 Executing financial model in Excel...", "assistant", true);
-        const result = await executeGeneratedCode(response.code, scriptLabEngine);
-        removeLastMessage();
-        addMessage(result, "assistant");
+      // Update progress indicator with token info if available
+      console.log('🔍 Response token info:', response.tokenInfo);
+      if (currentProgressIndicator && response.tokenInfo && response.tokenInfo.input_tokens && response.tokenInfo.output_tokens) {
+        console.log('✅ Updating progress with tokens:', response.tokenInfo.input_tokens, '+', response.tokenInfo.output_tokens);
+        currentProgressIndicator.updateWithTokens(response.tokenInfo.input_tokens, response.tokenInfo.output_tokens);
+        // Give a moment to show the token count
+        await new Promise(resolve => setTimeout(resolve, 1000));
       } else {
-        console.log('🔍 Frontend: No code to execute');
+        console.log('❌ No token info or missing currentProgressIndicator');
+        // For testing - simulate token display after 3 seconds if no real tokens
+        if (currentProgressIndicator) {
+          setTimeout(() => {
+            if (currentProgressIndicator) {
+              console.log('🧪 Testing token display with mock data');
+              currentProgressIndicator.updateWithTokens(850, 450); // Mock token counts (1300 total = 1.3k)
+            }
+          }, 3000);
+        }
+      }
+      
+      // Execute code immediately if generated (single-stage response)
+      if (response.code && response.execute) {
+        console.log('🔍 Frontend: Executing generated code...');
+        
+        const result = await executeGeneratedCode(response.code, scriptLabEngine);
+        
+        // Complete progress and show combined result
+        if (currentProgressIndicator) {
+          currentProgressIndicator.complete();
+          currentProgressIndicator = null;
+        }
+        
+        // Show single combined response with both AI text and execution result
+        const combinedMessage = `${response.message}\n\n${result}`;
+        addMessage(combinedMessage, "assistant");
+      } else {
+        // Complete progress indicator and show response
+        if (currentProgressIndicator) {
+          currentProgressIndicator.complete();
+          currentProgressIndicator = null;
+        }
+        
+        // Add AI response only
+        addMessage(response.message, "assistant");
       }
     } catch (error) {
-      removeLastMessage();
-      addMessage(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`, "assistant");
+      if (currentProgressIndicator) {
+        currentProgressIndicator.complete();
+        currentProgressIndicator = null;
+      }
+      
+      // Check if error was due to abort
+      if (error instanceof Error && error.name === 'AbortError') {
+        addMessage("Request cancelled.", "assistant");
+      } else {
+        addMessage(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`, "assistant");
+      }
+    } finally {
+      // Clean up
+      currentAbortController = null;
     }
+  }
+
+  function cleanMessageForDisplay(text: string): string {
+    // Remove technical details and keep only essential text
+    let cleaned = text;
+    
+    // Remove progress/chunk information
+    cleaned = cleaned.replace(/\*\*Build Process:\*\*[\s\S]*?(?=\n\n|$)/g, '');
+    cleaned = cleaned.replace(/\*\*Build Log:\*\*[\s\S]*?(?=\n\n|$)/g, '');
+    cleaned = cleaned.replace(/Progress: \d+\.\d+% - \d+\/\d+ chunks completed/g, '');
+    cleaned = cleaned.replace(/Executing: [^\n]+/g, '');
+    cleaned = cleaned.replace(/Error in [^\n]+/g, '');
+    
+    // Remove technical success/error prefixes but keep the main message
+    cleaned = cleaned.replace(/✅ \*\*[^*]+\*\*\n\n/g, '');
+    cleaned = cleaned.replace(/❌ \*\*[^*]+\*\*\n\n/g, '');
+    
+    // Remove execution details
+    cleaned = cleaned.replace(/The model was created using incremental building with enhanced stability\./g, '');
+    cleaned = cleaned.replace(/The incremental build process encountered issues\./g, '');
+    
+    // Clean execution results from single-stage responses
+    cleaned = cleaned.replace(/✅ Code generated successfully![^\n]*\n*/g, '');
+    cleaned = cleaned.replace(/✅ Direct Excel test completed![^\n]*\n*/g, '');
+    cleaned = cleaned.replace(/The code has been created and will be executed[^\n]*\n*/g, '');
+    
+    // Remove redundant execution confirmations
+    cleaned = cleaned.replace(/Check your selected cells[^\n]*\n*/g, '');
+    cleaned = cleaned.replace(/they should now show[^\n]*\n*/g, '');
+    
+    // Clean up multiple newlines and trim
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+    
+    // If the message is now too short or empty, provide a simple fallback
+    if (cleaned.length < 10) {
+      if (text.includes('Successfully') || text.includes('✅')) {
+        cleaned = 'Done! Your spreadsheet has been updated.';
+      } else if (text.includes('Error') || text.includes('❌')) {
+        cleaned = 'There was an issue processing your request. Please try again.';
+      } else {
+        cleaned = text; // Keep original if we can't determine intent
+      }
+    }
+    
+    return cleaned;
   }
 
   function addMessage(text: string, sender: "user" | "assistant", isTemporary: boolean = false) {
@@ -147,7 +249,10 @@ function initializeChat() {
     
     const textDiv = document.createElement("div");
     textDiv.className = "message-text";
-    textDiv.textContent = text;
+    
+    // Clean assistant messages to remove technical details
+    const displayText = sender === "assistant" ? cleanMessageForDisplay(text) : text;
+    textDiv.textContent = displayText;
     contentDiv.appendChild(textDiv);
 
     messageDiv.appendChild(avatarDiv);
@@ -165,9 +270,226 @@ function initializeChat() {
       lastMessage.remove();
     }
   }
+
+  class DynamicProgressIndicator {
+    private startTime: number;
+    private messageElement: HTMLElement | null = null;
+    private intervalId: number | null = null;
+    private isComplete: boolean = false;
+    private isCancelled: boolean = false;
+    private currentMessageIndex: number = 0;
+    private humanMessages: string[] = [];
+    private tokenInfo: { input: number; output: number } | null = null;
+    private currentTokenCount: number = 0;
+    private targetTokenCount: number = 0;
+    private animationSpeed: number = 2; // tokens per update (smaller for smoother animation)
+
+    constructor() {
+      this.startTime = Date.now();
+      this.setupKeyListener();
+    }
+
+    private setupKeyListener() {
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape' && !this.isComplete) {
+          this.cancel();
+          // Also abort the current request
+          if (currentAbortController) {
+            currentAbortController.abort();
+          }
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      
+      // Store reference to remove later
+      this.keyListener = handleKeyDown;
+    }
+    
+    private keyListener: ((event: KeyboardEvent) => void) | null = null;
+
+    show(taskType: string = "general") {
+      // Remove any existing temporary message
+      removeLastMessage();
+      
+      // Set human-like messages based on task type
+      this.setHumanMessages(taskType);
+      
+      // Create the progress message
+      const messageDiv = document.createElement("div");
+      messageDiv.className = "chat-message assistant-message";
+      messageDiv.setAttribute("data-temporary", "true");
+
+      const avatarDiv = document.createElement("div");
+      avatarDiv.className = "message-avatar";
+      
+      const avatarIcon = document.createElement("i");
+      avatarIcon.className = "ms-Icon ms-Icon--Robot ms-font-m";
+      avatarDiv.appendChild(avatarIcon);
+
+      const contentDiv = document.createElement("div");
+      contentDiv.className = "message-content";
+      
+      const textDiv = document.createElement("div");
+      textDiv.className = "message-text";
+      textDiv.style.display = "flex";
+      textDiv.style.alignItems = "center";
+      textDiv.style.gap = "8px";
+      
+      // Add typing animation
+      const typingIndicator = document.createElement("div");
+      typingIndicator.className = "typing-indicator";
+      typingIndicator.innerHTML = `
+        <span></span>
+        <span></span>
+        <span></span>
+      `;
+      
+      const progressText = document.createElement("span");
+      progressText.className = "progress-text";
+      
+      textDiv.appendChild(typingIndicator);
+      textDiv.appendChild(progressText);
+      contentDiv.appendChild(textDiv);
+
+      messageDiv.appendChild(avatarDiv);
+      messageDiv.appendChild(contentDiv);
+
+      chatMessages.appendChild(messageDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      
+      this.messageElement = progressText;
+      this.updateProgress();
+      
+      // ESC hint is now shown in the progress text, no popup needed
+      
+      // Start the timer - update every 100ms for smooth token animation
+      this.intervalId = window.setInterval(() => {
+        if (!this.isComplete && !this.isCancelled) {
+          this.updateProgress();
+        }
+      }, 100);
+    }
+
+
+    private setHumanMessages(taskType: string) {
+      // Simple single words with "ing" like Claude Code - capitalized
+      const allMessages = [
+        "Thinking", "Analyzing", "Processing", "Generating", "Creating", 
+        "Building", "Calculating", "Designing", "Optimizing", "Solving",
+        "Reviewing", "Planning", "Computing", "Modeling", "Structuring"
+      ];
+      
+      // Randomly select 3-4 words to cycle through
+      this.humanMessages = this.shuffleArray(allMessages).slice(0, 4);
+    }
+
+    private shuffleArray(array: string[]): string[] {
+      const shuffled = [...array];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled;
+    }
+
+    private formatTokenCount(count: number): string {
+      if (count >= 1000) {
+        const k = count / 1000;
+        return `${k.toFixed(1)}k`;
+      }
+      return Math.floor(count).toString();
+    }
+
+
+    updateProgress() {
+      if (this.messageElement && !this.isComplete && !this.isCancelled) {
+        const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+        
+        // Change message every 2-3 seconds
+        if (elapsed > 0 && elapsed % 2 === 0 && this.currentMessageIndex < this.humanMessages.length - 1) {
+          this.currentMessageIndex++;
+        }
+        
+        // Animate token count towards target
+        if (this.currentTokenCount < this.targetTokenCount) {
+          this.currentTokenCount = Math.min(this.currentTokenCount + this.animationSpeed, this.targetTokenCount);
+        }
+        
+        const currentMessage = this.humanMessages[this.currentMessageIndex] || this.humanMessages[0];
+        const tokenDisplay = this.formatTokenCount(this.currentTokenCount);
+        
+        // Always show token count (starts at 0, animates up)
+        this.messageElement.innerHTML = `${currentMessage} (${elapsed}s • ${tokenDisplay} tokens • <b>esc</b> to interrupt)`;
+      }
+    }
+
+    updateWithTokens(inputTokens: number, outputTokens: number) {
+      // Store token info and set target for animation
+      this.tokenInfo = { input: inputTokens, output: outputTokens };
+      this.targetTokenCount = inputTokens + outputTokens;
+      
+      // Set animation speed based on difference (since we update every 100ms, we need smaller increments)
+      const difference = this.targetTokenCount - this.currentTokenCount;
+      if (difference <= 100) {
+        this.animationSpeed = 1; // Very smooth for small numbers
+      } else if (difference <= 500) {
+        this.animationSpeed = 2; // Slightly faster
+      } else {
+        this.animationSpeed = Math.max(3, Math.floor(difference / 50)); // Faster for large jumps
+      }
+      
+      console.log(`🎬 Animating tokens from ${this.currentTokenCount} to ${this.targetTokenCount} (speed: ${this.animationSpeed})`);
+    }
+
+    cancel() {
+      this.isCancelled = true;
+      if (this.messageElement) {
+        this.messageElement.textContent = "Cancelled";
+      }
+      setTimeout(() => this.complete(), 1000);
+    }
+
+    complete() {
+      this.isComplete = true;
+      if (this.intervalId !== null) {
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+      }
+      if (this.keyListener) {
+        document.removeEventListener('keydown', this.keyListener);
+        this.keyListener = null;
+      }
+      removeLastMessage();
+    }
+  }
+
+  let currentProgressIndicator: DynamicProgressIndicator | null = null;
+
+  function detectTaskType(message: string): string {
+    const lowerMessage = message.toLowerCase();
+    
+    if (lowerMessage.includes('dcf') || lowerMessage.includes('discounted cash flow') || 
+        lowerMessage.includes('valuation') || lowerMessage.includes('npv')) {
+      return 'dcf';
+    }
+    
+    if (lowerMessage.includes('financial') || lowerMessage.includes('model') || 
+        lowerMessage.includes('budget') || lowerMessage.includes('forecast') ||
+        lowerMessage.includes('projection') || lowerMessage.includes('analysis')) {
+      return 'financial';
+    }
+    
+    if (lowerMessage.includes('data') || lowerMessage.includes('analyze') || 
+        lowerMessage.includes('chart') || lowerMessage.includes('graph') ||
+        lowerMessage.includes('pivot') || lowerMessage.includes('summary')) {
+      return 'data';
+    }
+    
+    return 'general';
+  }
 }
 
-async function processUserMessage(message: string, engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string; execute?: boolean }> {
+async function processUserMessage(message: string, engine: SimpleScriptLabEngine): Promise<AIResponse> {
   // Direct AI chat via backend
   return await chatWithAI(message, engine);
 }
@@ -197,7 +519,7 @@ async function testBackendConnection(): Promise<{ message: string }> {
 
 
 // Direct AI chat with backend
-async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string; execute?: boolean }> {
+async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<AIResponse> {
   try {
     console.log('🔍 Starting AI chat with comprehensive context...');
     
@@ -332,7 +654,8 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
         'ngrok-skip-browser-warning': 'true'
       },
       body: JSON.stringify(queryPayload),
-      mode: 'cors'
+      mode: 'cors',
+      signal: currentAbortController?.signal
     });
     
     if (!response.ok) {
@@ -340,6 +663,22 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     }
     
     const data = await response.json();
+    
+    // Check for token information in response  
+    let tokenInfo = null;
+    console.log('🔍 Checking for token data in response:', {
+      hasUsage: !!data.usage,
+      hasTokenUsage: !!data.token_usage, 
+      hasTokens: !!data.tokens,
+      dataKeys: Object.keys(data)
+    });
+    
+    if (data.usage || data.token_usage || data.tokens) {
+      tokenInfo = data.usage || data.token_usage || data.tokens;
+      console.log('🔢 Token usage found:', tokenInfo);
+    } else {
+      console.log('❌ No token information found in response');
+    }
     
     // Extract AI response
     let aiMessage = '';
@@ -385,7 +724,7 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
           aiMessage = `❌ **Model Building Failed**\n\nThe incremental build process encountered issues.\n\n**Build Log:**\n${progressMessages.slice(-5).join('\n')}\n\nPlease try again or contact support.`;
         }
         
-        return { message: aiMessage, execute: false };
+        return { message: aiMessage, execute: false, tokenInfo: tokenInfo };
         
       } catch (error) {
         console.error('❌ Incremental building failed:', error);
@@ -435,7 +774,8 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     return { 
       message: aiMessage || '🤖 AI response received but was empty',
       code: generatedCode,
-      execute: executeCode
+      execute: executeCode,
+      tokenInfo: tokenInfo
     };
     
   } catch (error) {
