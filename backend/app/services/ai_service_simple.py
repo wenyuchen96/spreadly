@@ -1616,8 +1616,8 @@ await Excel.run(async (context) => {{
 
 🚨 CODE COMPLETION GUARANTEE 🚨
 - Generate ONLY complete, executable code
-- MUST start with: await Excel.run(async (context) => {
-- MUST end with: });
+- MUST start with: await Excel.run(async (context) => {{
+- MUST end with: }});
 - NEVER end mid-statement or mid-formula
 - Complete all array brackets [...] and quotes "..."
 - If running out of space, prioritize completing current operations over adding new ones
