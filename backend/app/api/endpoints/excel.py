@@ -149,9 +149,10 @@ async def query_spreadsheet(
     query_data: Dict[str, Any],
     db: Session = Depends(get_db)
 ):
-    """Natural language query on spreadsheet data"""
+    """Natural language query on spreadsheet data with comprehensive workbook context"""
     session_token = query_data.get("session_token")
     query = query_data.get("query")
+    workbook_context = query_data.get("workbook_context")  # New comprehensive context
     
     if not session_token or not query:
         raise HTTPException(status_code=400, detail="Session token and query are required")
@@ -160,8 +161,12 @@ async def query_spreadsheet(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
+    print(f"🔍 Backend: Processing query with workbook context: {bool(workbook_context)}")
+    if workbook_context:
+        print(f"📊 Backend: Context includes {len(workbook_context.get('sheets', []))} sheets, {len(workbook_context.get('tables', []))} tables")
+    
     ai_service = AIService()
-    result = await ai_service.process_natural_language_query(session.id, query)
+    result = await ai_service.process_natural_language_query(session.id, query, workbook_context)
     
     # Check if result is raw JavaScript code (for financial models)
     if isinstance(result, str) and 'Excel.run' in result:

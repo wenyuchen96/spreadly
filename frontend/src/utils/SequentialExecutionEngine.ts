@@ -54,14 +54,15 @@ export class SequentialExecutionEngine {
   constructor(config: Partial<ExecutionConfig> = {}) {
     this.config = {
       strategy: 'default',
-      maxRetries: 3,
+      maxRetries: 2,
       continueOnError: true,
-      validateEachStage: true,
-      operationTimeout: 10000, // 10 seconds
+      validateEachStage: false, // Disable for faster execution
+      operationTimeout: 5000, // 5 seconds per operation
       ...config
     };
     
     console.log('🔄 SequentialExecutionEngine initialized with strategy:', this.config.strategy);
+    console.log('🔄 Config:', this.config);
   }
 
   /**
@@ -70,35 +71,70 @@ export class SequentialExecutionEngine {
   parseCodeIntoOperations(code: string, description: string = 'Financial Model'): ExecutionOperation[] {
     console.log('🔍 Parsing code into sequential operations...');
     console.log('📝 Code length:', code.length, 'characters');
+    console.log('📝 Code preview:', code.substring(0, 200) + '...');
     
     const operations: ExecutionOperation[] = [];
     let operationCounter = 0;
 
-    // Split by Excel.run() blocks first
-    const excelRunBlocks = this.extractExcelRunBlocks(code);
-    
-    if (excelRunBlocks.length === 0) {
-      // No Excel.run blocks found, treat as single operation
-      operations.push({
-        id: `op_${++operationCounter}`,
+    try {
+      // Split by Excel.run() blocks first
+      console.log('🔍 Extracting Excel.run() blocks...');
+      const excelRunBlocks = this.extractExcelRunBlocks(code);
+      console.log(`🔍 Found ${excelRunBlocks.length} Excel.run() blocks`);
+      
+      if (excelRunBlocks.length === 0) {
+        console.log('⚠️ No Excel.run blocks found, treating as single operation');
+        // No Excel.run blocks found, treat as single operation
+        operations.push({
+          id: `op_${++operationCounter}`,
+          type: 'data',
+          code: code,
+          dependencies: [],
+          optional: false,
+          description: description,
+          stage: 1
+        });
+        return operations;
+      }
+
+      console.log('🔍 Parsing individual Excel.run() blocks...');
+      excelRunBlocks.forEach((block, blockIndex) => {
+        console.log(`🔍 Parsing block ${blockIndex + 1}/${excelRunBlocks.length}`);
+        try {
+          const blockOperations = this.parseExcelRunBlock(block, blockIndex, operationCounter);
+          operations.push(...blockOperations);
+          operationCounter += blockOperations.length;
+          console.log(`✅ Block ${blockIndex + 1} parsed: ${blockOperations.length} operations`);
+        } catch (error) {
+          console.error(`❌ Error parsing block ${blockIndex + 1}:`, error);
+          // Add fallback operation for failed block
+          operations.push({
+            id: `op_${++operationCounter}_fallback`,
+            type: 'data',
+            code: block,
+            dependencies: [],
+            optional: true,
+            description: `Fallback for block ${blockIndex + 1}`,
+            stage: blockIndex + 1
+          });
+        }
+      });
+
+      console.log(`✅ Parsed ${operations.length} operations across ${this.getMaxStage(operations)} stages`);
+      return operations;
+    } catch (error) {
+      console.error('❌ Critical error in parseCodeIntoOperations:', error);
+      // Return single fallback operation
+      return [{
+        id: 'op_1_critical_fallback',
         type: 'data',
         code: code,
         dependencies: [],
         optional: false,
-        description: description,
+        description: 'Critical fallback - single operation',
         stage: 1
-      });
-      return operations;
+      }];
     }
-
-    excelRunBlocks.forEach((block, blockIndex) => {
-      const blockOperations = this.parseExcelRunBlock(block, blockIndex, operationCounter);
-      operations.push(...blockOperations);
-      operationCounter += blockOperations.length;
-    });
-
-    console.log(`✅ Parsed ${operations.length} operations across ${this.getMaxStage(operations)} stages`);
-    return operations;
   }
 
   /**
@@ -178,52 +214,148 @@ export class SequentialExecutionEngine {
    * Parse single Excel.run block into operations
    */
   private parseExcelRunBlock(block: string, blockIndex: number, startCounter: number): ExecutionOperation[] {
+    console.log(`🔍 Parsing Excel.run block ${blockIndex + 1}...`);
     const operations: ExecutionOperation[] = [];
     let operationCounter = startCounter;
 
-    // Extract the content inside Excel.run()
-    const contentMatch = block.match(/Excel\.run\s*\(\s*async\s*\(\s*context\s*\)\s*=>\s*\{(.*)\}\s*\)\s*;?/s);
-    if (!contentMatch) {
-      console.warn('⚠️ Could not parse Excel.run block:', block.substring(0, 100));
-      return operations;
-    }
-
-    const content = contentMatch[1];
-    const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-
-    let currentOperation: Partial<ExecutionOperation> = {
-      dependencies: [],
-      optional: false,
-      stage: 1
-    };
-    let operationLines: string[] = [];
-
-    for (const line of lines) {
-      // Detect operation boundaries and types
-      if (this.isOperationBoundary(line)) {
-        // Finish current operation if it has content
-        if (operationLines.length > 0) {
-          operations.push(this.finalizeOperation(currentOperation, operationLines, ++operationCounter, blockIndex));
-          operationLines = [];
-        }
-        
-        // Start new operation
-        currentOperation = {
+    try {
+      // Extract the content inside Excel.run()
+      const contentMatch = block.match(/Excel\.run\s*\(\s*async\s*\(\s*context\s*\)\s*=>\s*\{(.*)\}\s*\)\s*;?/s);
+      if (!contentMatch) {
+        console.warn('⚠️ Could not parse Excel.run block, treating as single operation');
+        // Fallback: treat entire block as single operation
+        operations.push({
+          id: `op_${++operationCounter}_block_${blockIndex}`,
+          type: 'data',
+          code: block,
           dependencies: [],
           optional: false,
-          ...this.analyzeOperationType(line)
-        };
+          description: `Excel.run block ${blockIndex + 1}`,
+          stage: blockIndex + 1
+        });
+        return operations;
       }
+
+      const content = contentMatch[1];
+      const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
       
-      operationLines.push(line);
-    }
+      console.log(`🔍 Found ${lines.length} lines to parse`);
 
-    // Finalize last operation
-    if (operationLines.length > 0) {
-      operations.push(this.finalizeOperation(currentOperation, operationLines, ++operationCounter, blockIndex));
-    }
+      // Simple approach: if the block has stage comments, split by them
+      if (content.includes('// STAGE')) {
+        console.log('🔍 Using stage-based parsing');
+        return this.parseByStageComments(block, blockIndex, operationCounter);
+      }
 
+      // Otherwise, use line-by-line approach but with simpler logic
+      console.log('🔍 Using line-by-line parsing');
+      let currentOperation: Partial<ExecutionOperation> = {
+        dependencies: [],
+        optional: false,
+        stage: 1
+      };
+      let operationLines: string[] = [];
+
+      for (const line of lines) {
+        // Detect operation boundaries and types
+        if (this.isOperationBoundary(line)) {
+          // Finish current operation if it has content
+          if (operationLines.length > 0) {
+            operations.push(this.finalizeOperation(currentOperation, operationLines, ++operationCounter, blockIndex));
+            operationLines = [];
+          }
+          
+          // Start new operation
+          currentOperation = {
+            dependencies: [],
+            optional: false,
+            ...this.analyzeOperationType(line)
+          };
+        }
+        
+        operationLines.push(line);
+      }
+
+      // Finalize last operation
+      if (operationLines.length > 0) {
+        operations.push(this.finalizeOperation(currentOperation, operationLines, ++operationCounter, blockIndex));
+      }
+
+      console.log(`✅ Parsed block into ${operations.length} operations`);
+      return operations;
+      
+    } catch (error) {
+      console.error('❌ Error in parseExcelRunBlock:', error);
+      // Fallback: single operation for entire block
+      operations.push({
+        id: `op_${++operationCounter}_fallback_${blockIndex}`,
+        type: 'data',
+        code: block,
+        dependencies: [],
+        optional: false,
+        description: `Fallback operation for block ${blockIndex + 1}`,
+        stage: blockIndex + 1
+      });
+      return operations;
+    }
+  }
+
+  /**
+   * Parse by stage comments (// STAGE 1:, // STAGE 2:, etc.)
+   */
+  private parseByStageComments(block: string, blockIndex: number, startCounter: number): ExecutionOperation[] {
+    console.log('🔍 Parsing by stage comments...');
+    const operations: ExecutionOperation[] = [];
+    let operationCounter = startCounter;
+    
+    // Split by stage comments
+    const stagePattern = /\/\/\s*STAGE\s*(\d+):\s*([^\n]*)/gi;
+    const parts = block.split(stagePattern);
+    
+    for (let i = 1; i < parts.length; i += 3) {
+      const stageNumber = parseInt(parts[i]);
+      const stageDescription = parts[i + 1] || 'Stage operation';
+      const stageCode = parts[i + 2] || '';
+      
+      if (stageCode.trim()) {
+        operations.push({
+          id: `op_${++operationCounter}_stage_${stageNumber}`,
+          type: this.getStageType(stageNumber),
+          code: this.wrapInExcelRun([stageCode.trim()]),
+          dependencies: [],
+          optional: false,
+          description: stageDescription.trim(),
+          stage: stageNumber
+        });
+      }
+    }
+    
+    // If no stages found, fallback to single operation
+    if (operations.length === 0) {
+      operations.push({
+        id: `op_${++operationCounter}_single`,
+        type: 'data',
+        code: block,
+        dependencies: [],
+        optional: false,
+        description: 'Single operation fallback',
+        stage: 1
+      });
+    }
+    
+    console.log(`✅ Stage-based parsing created ${operations.length} operations`);
     return operations;
+  }
+
+  /**
+   * Get operation type based on stage number
+   */
+  private getStageType(stageNumber: number): ExecutionOperation['type'] {
+    if (stageNumber === 1) return 'sheet_setup';
+    if (stageNumber <= 3) return 'header';
+    if (stageNumber <= 7) return 'data';
+    if (stageNumber <= 9) return 'formula';
+    return 'formatting';
   }
 
   /**

@@ -30,7 +30,7 @@ MODEL_CONFIGS = {
 class AIService:
     def __init__(self):
         print("🔧 Initializing AIService...")
-        self.model_name = "claude-sonnet-4-20250514"
+        self.model_name = "claude-sonnet-4-20250514"  # Use Claude 4 as requested
         
         # Initialize Anthropic client
         try:
@@ -135,11 +135,28 @@ class AIService:
             return self._mock_analysis()
     
     @trace_llm_operation("natural_language_query")
-    async def process_natural_language_query(self, session_id: int, query: str) -> Dict[str, Any]:
-        """Process natural language query about spreadsheet data with RAG enhancement"""
+    async def process_natural_language_query(self, session_id: int, query: str, workbook_context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process natural language query about spreadsheet data with RAG enhancement and comprehensive workbook context"""
         print(f"🔍 Processing query: '{query[:50]}...'")
         print(f"🔍 Claude client status: {self.client is not None}")
         print(f"🔍 RAG enabled: {self.rag_enabled}")
+        print(f"📊 Workbook context provided: {bool(workbook_context)}")
+        
+        if workbook_context:
+            metadata = workbook_context.get('metadata', {})
+            sheets = workbook_context.get('sheets', [])
+            tables = workbook_context.get('tables', [])
+            print(f"📊 Context: {metadata.get('totalSheets', 0)} sheets, {len(tables)} tables, active: {metadata.get('activeSheetName', 'unknown')}")
+            
+            # Debug: Print actual sheet data for active sheet
+            for sheet in sheets:
+                if sheet.get('isActive'):
+                    sheet_data = sheet.get('data', [])
+                    print(f"🔍 Active sheet '{sheet.get('name')}' data length: {len(sheet_data)}")
+                    if sheet_data:
+                        print(f"🔍 First row data: {sheet_data[0] if len(sheet_data) > 0 else 'empty'}")
+                        print(f"🔍 Second row data: {sheet_data[1] if len(sheet_data) > 1 else 'no second row'}")
+                    break
         
         if not self.client:
             print("🚨 MOCK TRIGGER: Claude client is None")
@@ -235,6 +252,11 @@ class AIService:
                         vector_store_status="error"
                     )
                     rag_context = ""
+        
+        # Build workbook context string
+        workbook_context_string = ""
+        if workbook_context:
+            workbook_context_string = self._build_workbook_context_prompt(workbook_context)
         
         if wants_code_execution:
             # For financial models, check if we should use a template
@@ -485,6 +507,8 @@ class AIService:
                 
                 🚨 BEFORE WRITING ANY CODE: REMEMBER .values = [[...]] and .formulas = [[...]] 🚨
                 
+                {workbook_context_string}
+                
                 Use this as your base template and customize it for the user's specific requirements:
                 {self._get_base_template(query)}
                 
@@ -505,6 +529,8 @@ class AIService:
                 
                 🚨 BEFORE WRITING ANY CODE: REMEMBER .values = [[...]] and .formulas = [[...]] 🚨
                 
+                {workbook_context_string}
+                
                 Generate JavaScript code using Excel.js API that creates a complete financial model in Excel.
                 
                 {compatibility_rules}
@@ -517,6 +543,8 @@ class AIService:
                 RETURN ONLY EXECUTABLE JAVASCRIPT CODE - NO JSON, NO EXPLANATIONS, NO MARKDOWN.
                 
                 🚨 BEFORE WRITING ANY CODE: REMEMBER .values = [[...]] and .formulas = [[...]] 🚨
+                
+                {workbook_context_string}
                 
                 Generate JavaScript code using Excel.js API that performs the requested operation.
                 
@@ -537,6 +565,8 @@ class AIService:
             
             Question: {query}
             Context: Session ID: {session_id}
+            
+            {workbook_context_string}
             
             Provide a clear, actionable answer. If the question requires a formula,
             provide the Excel formula. If it requires analysis, provide the analysis.
@@ -1204,3 +1234,272 @@ await Excel.run(async (context) => {
                 "example": "Counts cells with values greater than 0"
             }
         ]
+    
+    def _build_workbook_context_prompt(self, workbook_context: Dict[str, Any]) -> str:
+        """Build a comprehensive context prompt from workbook data"""
+        if not workbook_context:
+            return ""
+        
+        context_parts = []
+        
+        # Metadata
+        metadata = workbook_context.get('metadata', {})
+        if metadata:
+            context_parts.append(f"""
+📊 CURRENT WORKBOOK CONTEXT:
+- Total sheets: {metadata.get('totalSheets', 0)}
+- Active sheet: {metadata.get('activeSheetName', 'unknown')}
+- Last modified: {metadata.get('lastModified', 'unknown')}""")
+        
+        # Sheets information
+        sheets = workbook_context.get('sheets', [])
+        if sheets:
+            context_parts.append(f"""
+📋 SHEET STRUCTURE ({len(sheets)} sheets):""")
+            
+            for sheet in sheets[:5]:  # Limit to first 5 sheets to avoid token overflow
+                # Handle both string and dict formats for backward compatibility
+                if isinstance(sheet, str):
+                    sheet_name = sheet
+                    sheet_info = f"  • {sheet_name}"
+                    data = []
+                else:
+                    sheet_name = sheet.get('name', 'Unknown')
+                    sheet_info = f"  • {sheet_name}"
+                    if sheet.get('isActive'):
+                        sheet_info += " (ACTIVE)"
+                    
+                    used_range = sheet.get('usedRange')
+                    if used_range:
+                        sheet_info += f" - {used_range.get('rowCount', 0)}x{used_range.get('columnCount', 0)} used range"
+                    else:
+                        sheet_info += " - empty"
+                    
+                    # Add sample data if available and not too large
+                    data = sheet.get('data', [])
+                print(f"🔍 Backend processing sheet '{sheet_name}' - data type: {type(data)}, length: {len(data) if data else 'None'}")
+                if data:
+                    print(f"🔍 First row sample: {data[0] if len(data) > 0 else 'No first row'}")
+                
+                if data and len(data) > 0:
+                    # Show first few rows/cols of data
+                    sample_rows = min(5, len(data))  # Show up to 5 rows instead of 3
+                    sheet_info += f"\n    📋 Actual Data ({len(data)} rows):"
+                    
+                    # Check if data has actual content
+                    has_real_content = False
+                    for i in range(sample_rows):
+                        if i < len(data):
+                            row_data = data[i][:10] if data[i] else []  # Show up to 10 columns
+                            
+                            # Check if row has meaningful content (not just empty strings/nulls)
+                            meaningful_cells = [cell for cell in row_data if cell not in [None, '', 0, False]]
+                            if meaningful_cells:
+                                has_real_content = True
+                            
+                            sheet_info += f"\n      Row {i+1}: {row_data}"
+                            if meaningful_cells:
+                                sheet_info += f" ← {len(meaningful_cells)} non-empty cells"
+                        else:
+                            sheet_info += f"\n      Row {i+1}: [missing row]"
+                    
+                    if len(data) > sample_rows:
+                        sheet_info += f"\n      ... and {len(data) - sample_rows} more rows"
+                    
+                    if not has_real_content:
+                        sheet_info += f"\n    ⚠️ Note: All cells appear to be empty or contain default values"
+                        
+                elif data is not None and len(data) == 0:
+                    sheet_info += f"\n    📋 Data: Empty sheet (no data array)"
+                else:
+                    sheet_info += f"\n    📋 Data: No data field provided"
+                
+                context_parts.append(sheet_info)
+        
+        # Tables information
+        tables = workbook_context.get('tables', [])
+        if tables:
+            context_parts.append(f"""
+🗂 TABLES ({len(tables)} tables):""")
+            for table in tables[:3]:  # Limit to avoid token overflow
+                table_info = f"  • {table.get('name', 'Unknown')} in {table.get('sheetName', 'Unknown sheet')}"
+                headers = table.get('headers', [])
+                if headers:
+                    table_info += f" - Columns: {', '.join(headers[:5])}"  # First 5 columns
+                table_info += f" ({table.get('rowCount', 0)} rows)"
+                context_parts.append(table_info)
+        
+        # Named ranges
+        named_ranges = workbook_context.get('namedRanges', [])
+        if named_ranges:
+            context_parts.append(f"""
+🏷 NAMED RANGES ({len(named_ranges)} ranges):""")
+            for named_range in named_ranges[:5]:  # Limit to avoid token overflow
+                range_info = f"  • {named_range.get('name', 'Unknown')}: {named_range.get('formula', 'Unknown formula')}"
+                context_parts.append(range_info)
+        
+        # Summary information
+        summary = workbook_context.get('summary', {})
+        if summary:
+            context_parts.append(f"""
+📈 WORKBOOK SUMMARY:
+- Total cells: {summary.get('totalCells', 0)}
+- Used cells: {summary.get('totalUsedCells', 0)}
+- Has formulas: {summary.get('hasFormulas', False)}
+- Has charts: {summary.get('hasCharts', False)}""")
+        
+        if context_parts:
+            full_context = "".join(context_parts)
+            full_context += "\n\n💡 USE THIS CONTEXT: Consider the existing data, structure, and active sheet when generating code."
+            return full_context
+        
+        return ""
+    
+    @trace_llm_operation("incremental_chunk_generation")
+    async def generate_incremental_chunk(
+        self, 
+        session_id: int, 
+        model_type: str,
+        build_context: str,
+        workbook_context: Dict[str, Any] = None,
+        previous_errors: List[str] = None
+    ) -> str:
+        """Generate a single optimized code chunk for incremental model building"""
+        
+        print(f"🔧 Generating incremental chunk for {model_type} model")
+        
+        if not self.client:
+            print("🚨 MOCK TRIGGER: Claude client is None for chunk generation")
+            return self._mock_chunk_response(model_type)
+        
+        # Build workbook context string
+        workbook_context_string = ""
+        if workbook_context:
+            workbook_context_string = self._build_workbook_context_prompt(workbook_context)
+        
+        # Build error avoidance context
+        error_context = ""
+        if previous_errors:
+            error_context = f"""
+ERRORS TO AVOID (from previous attempts):
+{chr(10).join(f"- {error}" for error in previous_errors[-3:])}
+
+IMPORTANT: Analyze these errors and avoid similar patterns in your code generation.
+"""
+        
+        # Build incremental chunk prompt with STRICT code-only output
+        chunk_prompt = f"""
+SYSTEM: You are a JavaScript code generator. You MUST return ONLY executable JavaScript code with NO explanations, NO markdown, NO analysis text.
+
+TASK: Generate the next small chunk of Excel.js code for incremental {model_type.upper()} model building.
+
+CONTEXT:
+{build_context}
+{workbook_context_string}
+{error_context}
+
+🚨 CRITICAL OUTPUT REQUIREMENTS 🚨
+1. Start your response immediately with: await Excel.run(async (context) => {{
+2. End your response with: }});
+3. NO text before or after the code
+4. NO explanations, analysis, or comments outside the code
+5. NO markdown code fences (```)
+6. NO "Looking at the errors" or similar analysis text
+
+✅ REQUIRED CODE STRUCTURE ✅
+await Excel.run(async (context) => {{
+    const sheet = context.workbook.worksheets.getActiveWorksheet();
+    
+    // 2-5 Excel operations that ADVANCE the model construction
+    sheet.getRange("A1").values = [["value"]];  // 2D arrays required
+    sheet.getRange("A2").formulas = [["=SUM(A1)"]];  // 2D arrays required
+    
+    await context.sync();
+}});
+
+🎯 PROGRESSION REQUIREMENTS:
+- DO NOT repeat headers or assumptions if already created
+- ADVANCE to the next logical section based on context
+- Build DIFFERENT content each time - revenue, expenses, formulas, etc.
+- Each chunk should add NEW functionality to the DCF model
+
+⚡ SYNTAX: All .values and .formulas must use 2D arrays: [["value"]]
+🔒 SECURITY: No eval(), no external calls, only Excel.js operations
+
+DCF MODEL SECTIONS (build in order):
+1. Model title and main headers
+2. Assumptions section (growth rates, discount rate, etc.)
+3. Revenue projections (5-year forecast)
+4. Operating expenses calculations
+5. Free cash flow formulas
+6. DCF valuation (NPV, terminal value)
+7. Professional formatting
+
+Generate complete, executable code starting with await Excel.run and ending with }});
+"""
+
+        try:
+            # Remove token limits - let Claude generate complete code naturally
+            max_tokens = 4000  # Generous limit to ensure complete code generation
+            
+            with llm_tracer.trace_llm_call(
+                operation="incremental_chunk_generation",
+                model_name=self.model_name,
+                query_type=f"incremental_{model_type}",
+                max_tokens=max_tokens,
+                rag_enabled=False,
+                retrieved_models=0
+            ) as llm_span:
+                
+                print(f"🔧 Generating chunk with max_tokens: {max_tokens}")
+                
+                llm_span.set_attribute("llm.prompt_length", len(chunk_prompt))
+                
+                api_response = await self.client.messages.create(
+                    model=self.model_name,
+                    max_tokens=max_tokens,
+                    timeout=60.0,  # Shorter timeout for chunks
+                    system="You are a JavaScript code generator. Return ONLY executable JavaScript code. NO explanations, NO analysis, NO markdown. Start with 'await Excel.run' and end with '});'. Use 2D arrays for .values = [['value']].",
+                    messages=[{"role": "user", "content": chunk_prompt}]
+                )
+                
+                # Add success metrics to trace
+                llm_tracer.trace_llm_metrics(
+                    llm_span,
+                    prompt_tokens=getattr(api_response.usage, 'input_tokens', None),
+                    completion_tokens=getattr(api_response.usage, 'output_tokens', None),
+                    total_tokens=getattr(api_response.usage, 'input_tokens', 0) + getattr(api_response.usage, 'output_tokens', 0),
+                    response_length=len(api_response.content[0].text),
+                    attempts_used=1,
+                    final_success=True,
+                    rag_models_used=0
+                )
+                
+                chunk_code = api_response.content[0].text.strip()
+                
+                # Clean up the response (remove any markdown formatting)
+                if chunk_code.startswith('```'):
+                    lines = chunk_code.split('\n')
+                    chunk_code = '\n'.join(lines[1:-1]) if len(lines) > 2 else chunk_code
+                
+                print(f"✅ Generated chunk ({len(chunk_code)} characters)")
+                return chunk_code
+                
+        except Exception as e:
+            print(f"❌ Error generating incremental chunk: {e}")
+            return self._mock_chunk_response(model_type)
+    
+    def _mock_chunk_response(self, model_type: str) -> str:
+        """Fallback chunk generation when AI is unavailable"""
+        return f'''
+await Excel.run(async (context) => {{
+    const sheet = context.workbook.worksheets.getActiveWorksheet();
+    
+    // Mock {model_type} model chunk
+    sheet.getRange("A1").values = [["{model_type.upper()} MODEL"]];
+    sheet.getRange("A1").format.font.bold = true;
+    sheet.getRange("A1").format.fill.color = "#4472C4";
+    
+    await context.sync();
+}});
+'''

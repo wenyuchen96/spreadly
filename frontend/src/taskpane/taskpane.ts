@@ -35,9 +35,11 @@
 import { SimpleScriptLabEngine } from '../scriptlab/SimpleEngine';
 import { spreadlyAPI } from '../services/api';
 // Removed unused imports
-import { getSelectedRangeData } from '../services/excel-data';
+import { getSelectedRangeData, getComprehensiveWorkbookData, getLightweightWorkbookContext, getActiveSheetDataReliably, type ComprehensiveWorkbookData } from '../services/excel-data';
 import { BASE_URL, getApiUrl } from '../config/api-config';
-import { SequentialExecutionEngine, ExecutionConfig, ExecutionProgress } from '../utils/SequentialExecutionEngine';
+// Removed: Sequential execution replaced by incremental execution
+// import { SequentialExecutionEngine, ExecutionConfig, ExecutionProgress } from '../utils/SequentialExecutionEngine';
+import { IncrementalExecutor, shouldUseIncrementalBuild, extractModelType, ChunkInfo, ExecutionProgress as IncrementalProgress } from '../utils/IncrementalExecutor';
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -54,8 +56,8 @@ function initializeChat() {
   // Use SimpleEngine for testing (fallback without TypeScript compilation issues)
   const scriptLabEngine = new SimpleScriptLabEngine();
   
-  // Sequential execution configuration (enabled by default for better stability)
-  let useSequentialExecution = true;
+  // Sequential execution configuration (disabled - replaced by incremental execution)
+  let useSequentialExecution = false;
 
   // Auto-resize textarea
   chatInput.addEventListener("input", () => {
@@ -197,20 +199,129 @@ async function testBackendConnection(): Promise<{ message: string }> {
 // Direct AI chat with backend
 async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Promise<{ message: string; code?: string; execute?: boolean }> {
   try {
-    // First, get or create a session token
+    console.log('🔍 Starting AI chat with comprehensive context...');
+    
+    // First, get or create a session token with comprehensive workbook data
     let sessionToken = spreadlyAPI.getSessionToken();
+    let workbookData: ComprehensiveWorkbookData | null = null;
     
     if (!sessionToken) {
-      // Create a session by uploading some sample data
+      console.log('🔍 No existing session, creating new session with comprehensive data...');
+      
+      // Create a session with comprehensive workbook data
       try {
-        const excelData = await getSelectedRangeData();
-        const uploadResponse = await spreadlyAPI.uploadExcelData(excelData.data, 'ChatSession');
+        // First try to get comprehensive workbook data
+        workbookData = await getComprehensiveWorkbookData();
+        console.log('✅ Comprehensive workbook data collected:', {
+          sheets: workbookData.sheets.length,
+          tables: workbookData.tables.length,
+          namedRanges: workbookData.namedRanges.length,
+          totalUsedCells: workbookData.summary.totalUsedCells
+        });
+        
+        // Use the active sheet data for session creation, but we'll send full context separately
+        const activeSheet = workbookData.sheets.find(sheet => sheet.isActive);
+        const sessionData = activeSheet?.data || [['Workbook', 'Context', 'Available']];
+        
+        const uploadResponse = await spreadlyAPI.uploadExcelData(sessionData, `ComprehensiveSession_${workbookData.metadata.activeSheetName}`);
         sessionToken = uploadResponse.session_token;
-      } catch {
-        // No data selected, create session with minimal data
-        const uploadResponse = await spreadlyAPI.uploadExcelData([['Chat', 'Session']], 'DirectChat');
-        sessionToken = uploadResponse.session_token;
+        
+      } catch (error) {
+        console.warn('⚠️ Failed to get comprehensive data, falling back to lightweight context:', error);
+        
+        try {
+          // Fallback to lightweight context
+          const lightweightData = await getLightweightWorkbookContext();
+          console.log('✅ Lightweight context collected:', {
+            sheets: lightweightData.sheets?.length || 0,
+            activeSheet: lightweightData.metadata?.activeSheetName
+          });
+          
+          const uploadResponse = await spreadlyAPI.uploadExcelData([['Lightweight', 'Context', 'Available']], 'LightweightSession');
+          sessionToken = uploadResponse.session_token;
+          
+        } catch (fallbackError) {
+          console.warn('⚠️ Even lightweight context failed, using minimal data:', fallbackError);
+          
+          // Final fallback: minimal data
+          const uploadResponse = await spreadlyAPI.uploadExcelData([['Chat', 'Session']], 'MinimalSession');
+          sessionToken = uploadResponse.session_token;
+        }
       }
+    } else {
+      console.log('🔍 Using existing session, getting current workbook context...');
+      
+      // For existing sessions, still get current workbook context for this specific query
+      try {
+        workbookData = await getLightweightWorkbookContext() as ComprehensiveWorkbookData;
+        console.log('✅ Current workbook context updated');
+      } catch (error) {
+        console.warn('⚠️ Could not update workbook context for existing session:', error);
+      }
+    }
+    
+    // Prepare the query payload with comprehensive context
+    const queryPayload: any = {
+      session_token: sessionToken,
+      query: message
+    };
+    
+    // Include workbook context if available
+    if (workbookData) {
+      queryPayload.workbook_context = {
+        metadata: workbookData.metadata,
+        sheets: workbookData.sheets?.map(sheet => ({
+          name: sheet.name,
+          isActive: sheet.isActive,
+          usedRange: sheet.usedRange,
+          hasHeaders: sheet.hasHeaders,
+          dataTypes: sheet.dataTypes,
+          tableCount: sheet.tableCount,
+          chartCount: sheet.chartCount,
+          // Include actual data (limit to reasonable size to avoid overwhelming the API)
+          data: sheet.data?.slice(0, 10) || [],  // Send up to 10 rows
+          formulas: sheet.formulas?.slice(0, 10) || [],  // Send up to 10 rows of formulas
+          // Include formulas for context
+          hasFormulas: sheet.formulas?.some(row => row.some(cell => cell.startsWith('='))) || false
+        })) || [],
+        tables: workbookData.tables || [],
+        namedRanges: workbookData.namedRanges || [],
+        summary: workbookData.summary
+      };
+      
+      // If active sheet has no data, try reliable backup method
+      const activeSheet = queryPayload.workbook_context.sheets.find((s: any) => s.isActive);
+      if (activeSheet && (!activeSheet.data || activeSheet.data.length === 0)) {
+        console.log('🔍 Active sheet has no data, trying reliable backup method...');
+        try {
+          const reliableData = await getActiveSheetDataReliably();
+          if (reliableData.length > 0) {
+            activeSheet.data = reliableData.slice(0, 10);
+            console.log('✅ Reliable backup method successful:', { rows: reliableData.length, sample: reliableData.slice(0, 2) });
+          }
+        } catch (error) {
+          console.warn('⚠️ Reliable backup method failed:', error);
+        }
+      }
+      
+      console.log('📤 Sending comprehensive context to backend:', {
+        sheets: queryPayload.workbook_context.sheets.length,
+        tables: queryPayload.workbook_context.tables.length,
+        namedRanges: queryPayload.workbook_context.namedRanges.length
+      });
+      
+      // Debug: Show actual data being sent for active sheet
+      const activeSheetContext = queryPayload.workbook_context.sheets.find((s: any) => s.isActive);
+      if (activeSheetContext) {
+        console.log('🔍 Active sheet context being sent:', {
+          name: activeSheetContext.name,
+          usedRange: activeSheetContext.usedRange,
+          dataLength: activeSheetContext.data.length,
+          sampleData: activeSheetContext.data.slice(0, 2)  // First 2 rows
+        });
+      }
+    } else {
+      console.log('📤 Sending query without comprehensive context');
     }
     
     // Use the query endpoint for direct AI conversation
@@ -220,10 +331,7 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true'
       },
-      body: JSON.stringify({
-        session_token: sessionToken,
-        query: message
-      }),
+      body: JSON.stringify(queryPayload),
       mode: 'cors'
     });
     
@@ -238,12 +346,62 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     let generatedCode = null;
     let executeCode = false;
     
-    // Check if response is raw JavaScript code (for financial models)
-    if (typeof data.result === 'string' && data.result.includes('Excel.run')) {
-      console.log('🔍 Frontend: Detected raw JavaScript financial model code');
+    // Check if this should use incremental building instead of monolithic execution
+    if (shouldUseIncrementalBuild(message)) {
+      console.log('🔧 Frontend: Detected financial model query, using incremental building');
+      
+      const modelType = extractModelType(message);
+      console.log(`🔧 Model type detected: ${modelType}`);
+      
+      try {
+        const incrementalExecutor = new IncrementalExecutor(sessionToken);
+        
+        // Add progress tracking
+        const progressMessages: string[] = [];
+        
+        const success = await incrementalExecutor.startIncrementalBuild(
+          modelType,
+          message,
+          // Progress callback
+          (progress: IncrementalProgress) => {
+            console.log(`📊 Progress: ${progress.progress_percentage.toFixed(1)}% (${progress.completed_chunks}/${progress.total_chunks} chunks)`);
+            progressMessages.push(`Progress: ${progress.progress_percentage.toFixed(1)}% - ${progress.completed_chunks}/${progress.total_chunks} chunks completed`);
+          },
+          // Chunk callback
+          (chunk: ChunkInfo) => {
+            console.log(`🔧 Executing chunk: ${chunk.description} (${chunk.type})`);
+            progressMessages.push(`Executing: ${chunk.description}`);
+          },
+          // Error callback
+          (error: string, chunk: ChunkInfo) => {
+            console.warn(`❌ Chunk error: ${error}`);
+            progressMessages.push(`Error in ${chunk.id}: ${error}`);
+          }
+        );
+        
+        if (success) {
+          aiMessage = `✅ **${modelType.toUpperCase()} Model Built Successfully!**\n\nThe model was created using incremental building with enhanced stability.\n\n**Build Process:**\n${progressMessages.slice(-5).join('\n')}\n\n🎉 Your financial model is ready for use!`;
+        } else {
+          aiMessage = `❌ **Model Building Failed**\n\nThe incremental build process encountered issues.\n\n**Build Log:**\n${progressMessages.slice(-5).join('\n')}\n\nPlease try again or contact support.`;
+        }
+        
+        return { message: aiMessage, execute: false };
+        
+      } catch (error) {
+        console.error('❌ Incremental building failed:', error);
+        aiMessage = `❌ **Incremental Building Error**\n\nFailed to start incremental model building: ${error}\n\nFalling back to traditional approach...`;
+        
+        // Fall through to traditional handling
+      }
+    }
+    
+    // Traditional handling for non-incremental or fallback cases
+    // Skip traditional financial model execution if incremental was attempted
+    if (!shouldUseIncrementalBuild(message) && typeof data.result === 'string' && data.result.includes('Excel.run')) {
+      console.log('🔍 Frontend: Detected raw JavaScript code (non-financial model)');
       generatedCode = data.result;
       executeCode = true;
-      aiMessage = '✅ **Financial model generated successfully!**\n\nThe model code has been created and will be executed in your Excel spreadsheet.';
+      aiMessage = '✅ **Code generated successfully!**\n\nThe code has been created and will be executed in your Excel spreadsheet.';
     } else if (data.result) {
       if (data.result.answer) {
         aiMessage = data.result.answer;
@@ -323,7 +481,18 @@ async function executeExcelScriptCode(code: string, engine: SimpleScriptLabEngin
     // For financial models, prefer sequential execution for better stability
     if (useSequential && (code.includes('DCF') || code.includes('Financial') || code.includes('model') || code.length > 2000)) {
       console.log('🔄 Using sequential execution for financial model...');
-      return await executeSequentialExcel(code, true);
+      try {
+        // Add timeout for sequential execution attempt
+        const sequentialPromise = executeSequentialExcel(code, true);
+        const timeoutPromise = new Promise<string>((_, reject) => 
+          setTimeout(() => reject(new Error('Sequential execution timeout')), 30000) // 30 seconds
+        );
+        
+        return await Promise.race([sequentialPromise, timeoutPromise]);
+      } catch (error) {
+        console.warn('⚠️ Sequential execution failed or timed out, falling back to Script Lab:', error);
+        // Continue with normal Script Lab execution
+      }
     }
     
     console.log('🔍 Attempting Script Lab execution...');
@@ -2187,80 +2356,10 @@ function validateGeneratedCodeLegacy(code: string): { isValid: boolean; errors: 
   };
 }
 
-// Sequential execution for improved stability and error handling
+// Sequential execution has been replaced by incremental execution
 async function executeSequentialExcel(code: string, useSequential: boolean = true): Promise<string> {
-  if (!useSequential) {
-    return executeDirectExcel(code);
-  }
-
-  try {
-    console.log('🔄 Starting sequential execution...');
-    
-    // Create sequential execution engine with progress tracking
-    const sequentialEngine = new SequentialExecutionEngine({
-      strategy: 'default',
-      continueOnError: true,
-      validateEachStage: true,
-      progressCallback: (progress: ExecutionProgress) => {
-        console.log(`📊 Progress: Stage ${progress.currentStage}/${progress.totalStages}, Operations: ${progress.operationsCompleted}/${progress.totalOperations}`);
-        
-        // Update UI with progress (optional)
-        const statusElement = document.getElementById('execution-status');
-        if (statusElement) {
-          statusElement.textContent = `Executing: ${progress.currentOperation} (${progress.operationsCompleted}/${progress.totalOperations})`;
-        }
-      }
-    });
-
-    // Parse the monolithic code into sequential operations
-    const operations = sequentialEngine.parseCodeIntoOperations(code, 'Financial Model');
-    console.log(`🔍 Parsed ${operations.length} operations`);
-
-    // Execute operations sequentially
-    const results = await sequentialEngine.executeOperations(operations);
-    
-    // Get execution statistics
-    const stats = sequentialEngine.getExecutionStats();
-    console.log('📊 Execution stats:', stats);
-
-    // Generate result message based on success rate
-    if (stats.successRate >= 0.9) {
-      return `✅ **Financial model created successfully!** 
-
-📊 **Execution Summary:**
-- Operations completed: ${stats.successful}/${stats.totalOperations}
-- Success rate: ${(stats.successRate * 100).toFixed(1)}%
-- Total time: ${stats.totalTime}ms
-- Average operation time: ${stats.averageOperationTime.toFixed(1)}ms
-
-The model has been built using sequential execution for maximum reliability. Each operation was validated before proceeding to the next stage.`;
-    
-    } else if (stats.successRate >= 0.7) {
-      return `⚠️ **Financial model partially completed**
-
-📊 **Execution Summary:**
-- Operations completed: ${stats.successful}/${stats.totalOperations}
-- Success rate: ${(stats.successRate * 100).toFixed(1)}%
-- Failed operations: ${stats.failed}
-
-The model was created with some operations failing. The sequential approach isolated failures to prevent complete breakdown. Check your worksheet for the partial model.`;
-    
-    } else {
-      return `❌ **Financial model creation encountered significant issues**
-
-📊 **Execution Summary:**
-- Operations completed: ${stats.successful}/${stats.totalOperations}
-- Success rate: ${(stats.successRate * 100).toFixed(1)}%
-- Failed operations: ${stats.failed}
-
-Sequential execution prevented complete failure, but too many operations failed. Consider trying a simpler model or checking for data/formula conflicts.`;
-    }
-
-  } catch (error) {
-    console.error('🚨 Sequential execution error:', error);
-    console.log('🔄 Falling back to direct execution...');
-    return executeDirectExcel(code);
-  }
+  console.log('🔄 Sequential execution disabled, using direct execution');
+  return executeDirectExcel(code);
 }
 
 // Fallback: Direct Excel execution for web Excel compatibility
