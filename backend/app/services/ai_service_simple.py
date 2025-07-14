@@ -163,7 +163,8 @@ class AIService:
             return self._mock_query_response(query)
         
         # Check if user wants a financial model or any Excel operation
-        model_keywords = ['model', 'dcf', 'financial model', 'valuation', 'cash flow', 'npv', 'irr', 'scenario analysis', 'monte carlo', 'sensitivity analysis']
+        model_keywords = ['model', 'dcf', 'financial model', 'valuation', 'cash flow', 'npv', 'irr', 'scenario analysis', 'monte carlo', 'sensitivity analysis', 
+                         'three statement', '3 statement', 'three-statement', '3-statement', 'integrated model', 'income statement', 'balance sheet', 'cash flow statement']
         wants_model = any(keyword in query.lower() for keyword in model_keywords)
         
         # Check if user wants any Excel operation (formulas, formatting, data entry, etc.)
@@ -407,6 +408,8 @@ class AIService:
                 - Error handling: IFERROR(), ISERROR(), ISNUMBER()
                 
                 💼 PROFESSIONAL MODEL STRUCTURE:
+                {self._get_universal_model_best_practices()}
+                
                 {self._get_model_requirements(query)}
                 {rag_enhancement}
                 
@@ -838,45 +841,178 @@ class AIService:
         return mock_patterns
     
     def _get_model_requirements(self, query: str) -> str:
-        """Get specific requirements based on model type"""
+        """Get specific requirements based on model type - only detailed requirements when specifically needed"""
         query_lower = query.lower()
         
-        if 'dcf' in query_lower or 'discounted cash flow' in query_lower:
+        # Only include detailed model-specific requirements for specific model types
+        # to preserve context window for general modeling
+        if ('three' in query_lower and 'statement' in query_lower) or ('3' in query_lower and 'statement' in query_lower) or 'integrated model' in query_lower:
             return """
-            DCF Components: Free Cash Flow projections (5-10 years), Terminal Value calculation,
-            WACC calculation, Present Value of each year, Enterprise Value, Equity Value per share.
-            Include sensitivity tables for discount rate and growth rate assumptions.
+            SPECIFIC THREE-STATEMENT MODEL REQUIREMENTS:
+            
+            INTEGRATION FOCUS:
+            - Net Income flows: IS → Retained Earnings (BS) → Starting point (CF)
+            - Working capital changes: BS changes → CF operating activities
+            - CapEx: CF investing → PP&E changes on BS
+            - Debt: CF financing → Debt balances on BS
+            - Cash: CF ending cash → Cash on BS
+            
+            STATEMENT STRUCTURE:
+            - Income Statement: Revenue → COGS → Gross Profit → OpEx → EBITDA → D&A → EBIT → Interest → EBT → Taxes → Net Income
+            - Balance Sheet: Current Assets, Fixed Assets = Current Liabilities, Long-term Debt, Equity
+            - Cash Flow: Operating (start with NI), Investing (CapEx), Financing (debt/equity changes)
+            
+            REQUIRED CHECKS:
+            - Balance Sheet balances (Assets = Liab + Equity)
+            - Cash flow reconciliation (Beginning + Changes = Ending)
+            - Working capital days consistency (DSO, DPO, DIO)
+            """
+        elif 'dcf' in query_lower or 'discounted cash flow' in query_lower:
+            return """
+            DCF EXPERT SYSTEM:
+            
+            You are an expert financial analyst specializing in Discounted Cash Flow (DCF) modeling and valuation. Your expertise covers building, analyzing, and interpreting DCF models for enterprise and equity valuation.
+
+            DCF FUNDAMENTALS:
+            - DCF values a business as the sum of all future cash flows discounted to present value at a rate reflecting the riskiness of those cash flows
+            - Two main approaches: Unlevered DCF (values enterprise) and Levered DCF (values equity directly)
+            - Cash flows = Operating cash flows - cash reinvestment
+            - Discount rate = Required rate of return based on risk
+
+            UNLEVERED vs LEVERED DCF:
+            Unlevered DCF:
+            - Values operations for all capital providers (debt and equity)
+            - Uses Unlevered Free Cash Flow (UFCF): EBIAT + D&A +/- WC changes - CapEx
+            - Discounted at WACC
+            - Output is Enterprise Value, subtract net debt for equity value
+
+            Levered DCF:
+            - Values business for equity owners only
+            - Uses Levered Free Cash Flow (LFCF): CFO - CapEx - debt principal payments
+            - Discounted at Cost of Equity
+            - Output is Equity Value directly
+
+            DCF IMPLEMENTATION (Two-Stage Model):
+            Stage 1: Explicit forecast period (5-10 years)
+            - Project unlevered free cash flows annually
+            - Link from integrated financial statement model
+
+            Stage 2: Terminal Value
+            - Perpetuity Growth Method: TV = FCF(t+1)/(WACC-g), where g = 2-5% typically
+            - Exit Multiple Method: TV = Terminal EBITDA × EV/EBITDA multiple
+            - Discount TV to present value
+
+            WACC CALCULATION:
+            WACC = Cost of Debt × (1-Tax Rate) × (Debt/Total Capital) + Cost of Equity × (Equity/Total Capital)
+            - Cost of Debt: Current yield-to-maturity on company debt
+            - Cost of Equity: Risk-free rate + Beta × Equity Risk Premium
+            - Use market values for weights
+            - Assumes constant capital structure
+
+            COST OF EQUITY (CAPM):
+            Cost of Equity = Risk-free rate + β × Equity Risk Premium
+            - Risk-free rate: 10-year government bond yield
+            - Beta: Company's sensitivity to market risk
+            - Equity Risk Premium: 4-8% typically
+            - Add small-cap or country risk premiums if applicable
+
+            BETA CALCULATION:
+            - Public companies: Use regression-based beta from Bloomberg/services
+            - Private companies: Use industry beta approach
+            - Unlever comparable company betas: β(unlevered) = β(levered)/(1+(1-tax rate)×(Net Debt/Equity))
+            - Relever at target capital structure
+
+            NET DEBT CALCULATION:
+            Net Debt = Debt + Preferred Stock + Non-controlling Interests - Cash - Non-operating Assets
+            - Use book values as proxy for market values
+            - Include capital leases, exclude converted securities
+            - Test convertibles using if-converted method
+
+            DILUTED SHARES OUTSTANDING:
+            Diluted Shares = Basic Shares + Dilutive Securities
+            - Include all outstanding options/warrants that are in-the-money
+            - Use Treasury Stock Method for options
+            - Include unvested restricted stock
+            - Test convertible securities for dilution
+
+            TERMINAL VALUE CONSIDERATIONS:
+            - Normalize terminal FCF for sustainable growth
+            - Converge CapEx/Depreciation ratio to 1.0
+            - Remove one-time working capital swings
+            - Ensure growth rate < economy growth rate
+            - Terminal value often 50-80% of total value
+
+            DCF BEST PRACTICES:
+            - Present results as ranges via sensitivity analysis
+            - Key sensitivities: WACC, terminal growth, operating margins
+            - Link to integrated 3-statement model
+            - Match cash flows to discount rates consistently
+            - Address circularity from cash/WACC interaction
+
+            TECHNICAL IMPLEMENTATION:
+            - UFCF starts with EBIAT (EBIT × (1-tax rate)) to avoid double-counting interest tax shield
+            - Interest tax shield captured in WACC, not cash flows
+            - For negative net debt, equity weight >100%, debt weight negative
+            - Stock splits require retroactive adjustment of all share counts
+            - Model plug: Cash and revolver balance automatically
+
+            Focus on practical DCF implementation while maintaining theoretical accuracy, emphasizing the matching principle between cash flows and discount rates, proper treatment of non-operating items, and the critical importance of terminal value assumptions.
             """
         elif 'npv' in query_lower:
             return """
-            NPV Elements: Initial investment, Annual cash flows, Discount rate assumption,
-            Present value calculations for each period, Cumulative NPV, IRR calculation,
-            Payback period analysis. Include break-even analysis.
+            NPV FOCUS: Initial investment, Annual cash flows, Discount rate, Present values, IRR, Payback period.
+            """
+        elif 'lbo' in query_lower or 'leverage' in query_lower:
+            return """
+            LBO FOCUS: Sources/Uses, Debt schedules, Interest calculations, Credit metrics, Returns (IRR/MOIC).
             """
         elif 'valuation' in query_lower:
             return """
-            Valuation Metrics: Multiple valuation approaches (DCF, Comparable Companies, Precedent Transactions),
-            Key multiples (P/E, EV/EBITDA, EV/Revenue), Football field chart,
-            Sensitivity analysis across different methodologies.
+            VALUATION FOCUS: Multiple approaches (DCF, Comps, Precedents), Key multiples, Football field chart.
             """
         elif 'budget' in query_lower or 'forecast' in query_lower:
             return """
-            Budget Structure: Revenue forecasts by segment, Operating expenses breakdown,
-            EBITDA calculations, Working capital changes, CapEx planning,
-            Monthly/quarterly phasing, Variance analysis capabilities.
-            """
-        elif 'scenario' in query_lower or 'sensitivity' in query_lower:
-            return """
-            Scenario Analysis: Base/Best/Worst case scenarios, Key driver sensitivities,
-            Data tables for two-way sensitivity, Monte Carlo simulation setup,
-            Probability-weighted outcomes, Risk-adjusted returns.
+            BUDGET FOCUS: Revenue forecasts, Expense breakdown, EBITDA, Working capital, CapEx, Variance analysis.
             """
         else:
             return """
-            Standard Financial Model: Clear assumptions section, Logical calculation flow,
-            Summary dashboard with key metrics, Sensitivity analysis,
-            Professional formatting and documentation.
+            GENERAL MODEL FOCUS: Clear structure, Key assumptions, Calculations, Outputs, Professional presentation.
             """
+    
+    def _get_universal_model_best_practices(self) -> str:
+        """Universal financial modeling best practices - always included for any financial model"""
+        return """
+        
+        💼 UNIVERSAL FINANCIAL MODELING BEST PRACTICES:
+        
+        🎨 COLOR CODING STANDARDS:
+        - Blue (#0070C0): Hard-coded inputs and assumptions
+        - Black (#000000): Formulas and calculations  
+        - Green (#00B050): Links to other worksheets
+        - Red (#FF0000): External links or warnings
+        
+        📊 PROFESSIONAL FORMATTING:
+        - Consistent decimal places (0 for whole numbers, 1 for percentages, 2 for currency)
+        - Standard column widths and aligned headers
+        - Years/periods clearly labeled across columns
+        - Clear section breaks and subtotals
+        - Appropriate number formatting ($, %, etc.)
+        
+        🔍 MODEL VALIDATION & CHECKS:
+        - Balance checks where applicable (Assets = Liabilities + Equity)
+        - Cash flow reconciliation (Beginning + Changes = Ending)
+        - Error checking with IFERROR() functions
+        - Sensitivity analysis on key drivers
+        - Sources = Uses validation for capital structures
+        - Sanity checks (growth rates, margins, ratios within reasonable ranges)
+        
+        🏗️ STRUCTURE PRINCIPLES:
+        - Clear assumptions/inputs section at top
+        - Logical flow: Inputs → Calculations → Outputs
+        - Documentation and source references
+        - Scenario analysis capabilities
+        - Summary dashboard with key metrics
+        """
     
     def _get_base_template(self, query: str) -> str:
         """Get base template for specific model types"""
@@ -1235,6 +1371,45 @@ await Excel.run(async (context) => {
             }
         ]
     
+    def _get_model_sections_prompt(self, model_type: str) -> str:
+        """Get model-specific sections for incremental building"""
+        model_lower = model_type.lower()
+        
+        if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
+            return """THREE-STATEMENT MODEL SECTIONS (build in order):
+1-2. Headers and assumptions (growth, margins, working capital, tax rate)
+3-6. Income Statement (Revenue → COGS → OpEx → EBITDA → D&A → EBIT → Interest → EBT → Tax → NI)
+7-10. Balance Sheet (Current Assets, Fixed Assets, Current Liab, Debt, Equity)
+11-14. Cash Flow (Operating from NI, Working capital changes, Investing, Financing)
+15-17. Integration checks, metrics, formatting"""
+        
+        elif 'dcf' in model_lower or 'discounted' in model_lower:
+            return """DCF MODEL SECTIONS (build in order):
+1-2. Headers and assumptions (revenue growth, operating margins, tax rate, WACC components)
+3-4. Historical/projected P&L (Revenue, EBIT, EBIAT calculations)
+5-6. Working capital and CapEx schedules
+7-8. Unlevered Free Cash Flow calculation (EBIAT + D&A +/- WC - CapEx)
+9-10. Terminal Value (Perpetuity Growth and/or Exit Multiple methods)
+11-12. DCF valuation (Present values, Enterprise Value, Equity Value per share)
+13-14. WACC calculation and Cost of Equity (CAPM)
+15-16. Sensitivity analysis (WACC vs Terminal Growth, key operating assumptions)
+17. Professional formatting and checks"""
+        
+        elif 'lbo' in model_lower:
+            return """LBO MODEL SECTIONS (build in order):
+1-2. Transaction assumptions and sources/uses
+3-4. Operating model and debt schedules
+5-6. Credit metrics and returns analysis (IRR, MOIC)
+7. Sensitivity tables and formatting"""
+        
+        else:
+            # Default financial model sections
+            return """FINANCIAL MODEL SECTIONS (build in order):
+1-2. Headers and key assumptions
+3-4. Revenue projections and expense calculations
+5-6. Profitability analysis and key metrics
+7. Professional formatting"""
+    
     def _build_workbook_context_prompt(self, workbook_context: Dict[str, Any]) -> str:
         """Build a comprehensive context prompt from workbook data"""
         if not workbook_context:
@@ -1389,7 +1564,18 @@ IMPORTANT: Analyze these errors and avoid similar patterns in your code generati
         
         # Build incremental chunk prompt with STRICT code-only output
         chunk_prompt = f"""
-SYSTEM: You are a JavaScript code generator. You MUST return ONLY executable JavaScript code with NO explanations, NO markdown, NO analysis text.
+SYSTEM: You are an expert financial modeling JavaScript code generator. You MUST return ONLY executable JavaScript code with NO explanations, NO markdown, NO analysis text.
+
+🚨 CRITICAL CODE COMPLETION REQUIREMENTS 🚨
+1. ALWAYS complete your code chunks - never end mid-statement
+2. If approaching token limit, prioritize completing current operations
+3. End chunks at logical completion points (after context.sync())
+4. Ensure all opened brackets {{ }} are properly closed
+
+FINANCIAL MODELING STANDARDS:
+- Color code: Blue (#0070C0) inputs, Black (#000000) formulas, Green (#00B050) links
+- Professional formatting: Consistent decimals, clear headers, proper number formats
+- Include validation: Balance checks, error handling with IFERROR(), sanity checks
 
 TASK: Generate the next small chunk of Excel.js code for incremental {model_type.upper()} model building.
 
@@ -1410,7 +1596,7 @@ CONTEXT:
 await Excel.run(async (context) => {{
     const sheet = context.workbook.worksheets.getActiveWorksheet();
     
-    // 2-5 Excel operations that ADVANCE the model construction
+    // 2-4 Excel operations that ADVANCE the model construction (keep chunks small to avoid truncation)
     sheet.getRange("A1").values = [["value"]];  // 2D arrays required
     sheet.getRange("A2").formulas = [["=SUM(A1)"]];  // 2D arrays required
     
@@ -1426,21 +1612,22 @@ await Excel.run(async (context) => {{
 ⚡ SYNTAX: All .values and .formulas must use 2D arrays: [["value"]]
 🔒 SECURITY: No eval(), no external calls, only Excel.js operations
 
-DCF MODEL SECTIONS (build in order):
-1. Model title and main headers
-2. Assumptions section (growth rates, discount rate, etc.)
-3. Revenue projections (5-year forecast)
-4. Operating expenses calculations
-5. Free cash flow formulas
-6. DCF valuation (NPV, terminal value)
-7. Professional formatting
+{self._get_model_sections_prompt(model_type)}
+
+🚨 CODE COMPLETION GUARANTEE 🚨
+- Generate ONLY complete, executable code
+- MUST start with: await Excel.run(async (context) => {
+- MUST end with: });
+- NEVER end mid-statement or mid-formula
+- Complete all array brackets [...] and quotes "..."
+- If running out of space, prioritize completing current operations over adding new ones
 
 Generate complete, executable code starting with await Excel.run and ending with }});
 """
 
         try:
-            # Remove token limits - let Claude generate complete code naturally
-            max_tokens = 4000  # Generous limit to ensure complete code generation
+            # Use maximum available tokens for complete code generation
+            max_tokens = MODEL_CONFIGS.get(self.model_name, {}).get("max_output_tokens", 8192)
             
             with llm_tracer.trace_llm_call(
                 operation="incremental_chunk_generation",
@@ -1451,7 +1638,7 @@ Generate complete, executable code starting with await Excel.run and ending with
                 retrieved_models=0
             ) as llm_span:
                 
-                print(f"🔧 Generating chunk with max_tokens: {max_tokens}")
+                print(f"🔧 Generating chunk with max_tokens: {max_tokens} (maximum available for {self.model_name})")
                 
                 llm_span.set_attribute("llm.prompt_length", len(chunk_prompt))
                 

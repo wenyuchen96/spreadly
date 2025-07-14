@@ -338,8 +338,24 @@ await Excel.run(async (context) => {{
             return True
         
         # Also complete if we've hit the formatting stage and have good progress
-        current_stage = self._determine_build_stage(build_state.completed_chunks)
-        if current_stage >= 6 and build_state.completed_chunks >= 20:
+        current_stage = self._determine_build_stage(build_state.completed_chunks, build_state.financial_model_type)
+        model_lower = build_state.financial_model_type.lower()
+        
+        # Different completion criteria based on model type
+        if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
+            # Three-statement models need more chunks
+            completion_stage = 8
+            min_chunks = 25
+        elif 'dcf' in model_lower or 'discounted' in model_lower:
+            # DCF models now have 9 stages
+            completion_stage = 8
+            min_chunks = 20
+        else:
+            # Other models
+            completion_stage = 6
+            min_chunks = 15
+            
+        if current_stage >= completion_stage and build_state.completed_chunks >= min_chunks:
             print(f"✅ DCF model complete: Stage {current_stage} reached with {build_state.completed_chunks} chunks")
             return True
         
@@ -382,7 +398,7 @@ await Excel.run(async (context) => {{
         
         # Determine current stage based on completed chunks
         total_completed = build_state.completed_chunks
-        current_stage = self._determine_build_stage(total_completed)
+        current_stage = self._determine_build_stage(total_completed, build_state.financial_model_type)
         next_stage_description = self._get_next_stage_description(current_stage, build_state.financial_model_type)
         
         # Get completed chunk types to avoid repetition
@@ -395,8 +411,31 @@ await Excel.run(async (context) => {{
         
         recent_completions = completed_descriptions[-3:] if completed_descriptions else ["None yet"]
         
+        # Determine total stages based on model type
+        model_lower = build_state.financial_model_type.lower()
+        if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
+            total_stages = 9
+            progression_requirements = """PROGRESSION REQUIREMENTS:
+        1. DO NOT repeat similar chunks - move to the next logical stage
+        2. Build a COMPLETE THREE-STATEMENT MODEL with: Assumptions → Income Statement → Balance Sheet → Cash Flow → Integration
+        3. Each chunk should advance the model construction
+        4. Ensure proper statement integration (Net Income → RE, Cash flow ties, etc.)"""
+        elif 'dcf' in model_lower or 'discounted' in model_lower:
+            total_stages = 9
+            progression_requirements = """PROGRESSION REQUIREMENTS:
+        1. DO NOT repeat similar chunks - move to the next logical stage
+        2. Build a COMPLETE DCF MODEL with: Assumptions → P&L → Working Capital → Free Cash Flow → Terminal Value → Valuation → WACC → Sensitivity
+        3. Each chunk should advance the DCF model construction
+        4. Focus on proper DCF methodology (EBIAT, UFCF, WACC, Terminal Value)"""
+        else:
+            total_stages = 6
+            progression_requirements = """PROGRESSION REQUIREMENTS:
+        1. DO NOT repeat similar chunks - move to the next logical stage
+        2. Build a COMPLETE financial model with logical progression
+        3. Each chunk should advance the model construction"""
+        
         progress_context = f"""
-        DCF MODEL BUILDING PROGRESS - STAGE {current_stage}/6
+        {build_state.financial_model_type.upper()} MODEL BUILDING PROGRESS - STAGE {current_stage}/{total_stages}
         
         Model Type: {build_state.financial_model_type.upper()}
         Progress: {build_state.completed_chunks} chunks completed successfully
@@ -413,10 +452,7 @@ await Excel.run(async (context) => {{
         CURRENT WORKBOOK STATE:
         {self._format_workbook_context(build_state.workbook_context)}
         
-        PROGRESSION REQUIREMENTS:
-        1. DO NOT repeat similar chunks - move to the next logical stage
-        2. Build a COMPLETE DCF model with: Assumptions → Revenue → Expenses → Cash Flow → Valuation
-        3. Each chunk should advance the model construction
+        {progression_requirements}
         4. Focus on {next_stage_description}
         
         PREVIOUS ERRORS TO AVOID:
@@ -425,33 +461,82 @@ await Excel.run(async (context) => {{
         
         return progress_context
     
-    def _determine_build_stage(self, completed_chunks: int) -> int:
-        """Determine what stage of DCF building we're in"""
-        if completed_chunks < 3:
-            return 1  # Initial setup and headers
-        elif completed_chunks < 8:
-            return 2  # Assumptions section
-        elif completed_chunks < 15:
-            return 3  # Revenue projections
-        elif completed_chunks < 22:
-            return 4  # Expenses and cash flow
-        elif completed_chunks < 28:
-            return 5  # Valuation calculations
+    def _determine_build_stage(self, completed_chunks: int, model_type: str = "dcf") -> int:
+        """Determine what stage of model building we're in"""
+        model_lower = model_type.lower()
+        
+        if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
+            # Three-statement model has more stages
+            if completed_chunks < 2:
+                return 1  # Headers and setup
+            elif completed_chunks < 5:
+                return 2  # Assumptions
+            elif completed_chunks < 8:
+                return 3  # Income Statement - Revenue
+            elif completed_chunks < 12:
+                return 4  # Income Statement - Expenses
+            elif completed_chunks < 16:
+                return 5  # Balance Sheet - Assets
+            elif completed_chunks < 20:
+                return 6  # Balance Sheet - Liabilities
+            elif completed_chunks < 25:
+                return 7  # Cash Flow Statement
+            elif completed_chunks < 30:
+                return 8  # Integration and checks
+            else:
+                return 9  # Formatting and metrics
         else:
-            return 6  # Formatting and finalization
+            # DCF model stages (more detailed for comprehensive DCF)
+            if completed_chunks < 3:
+                return 1  # Headers and assumptions
+            elif completed_chunks < 6:
+                return 2  # P&L projections (Revenue, EBIT, EBIAT)
+            elif completed_chunks < 9:
+                return 3  # Working capital and CapEx schedules
+            elif completed_chunks < 12:
+                return 4  # Unlevered Free Cash Flow calculation
+            elif completed_chunks < 15:
+                return 5  # Terminal Value calculations
+            elif completed_chunks < 18:
+                return 6  # DCF valuation (PV, EV, Equity Value)
+            elif completed_chunks < 21:
+                return 7  # WACC and Cost of Equity
+            elif completed_chunks < 24:
+                return 8  # Sensitivity analysis
+            else:
+                return 9  # Professional formatting and checks
     
     def _get_next_stage_description(self, stage: int, model_type: str) -> str:
         """Get description of what should be built in the next stage"""
-        stage_descriptions = {
-            1: "Create main model headers and initial setup",
-            2: "Build detailed assumptions section with input cells", 
-            3: "Add revenue projections and growth calculations",
-            4: "Implement operating expenses and cash flow calculations",
-            5: "Create DCF valuation formulas (NPV, terminal value)",
-            6: "Apply professional formatting and final touches"
-        }
+        model_lower = model_type.lower()
         
-        return stage_descriptions.get(stage, "Complete the DCF model")
+        if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
+            stage_descriptions = {
+                1: "Create model title, periods, and main headers for all three statements",
+                2: "Build comprehensive assumptions section (growth rates, margins, working capital days, tax rate)",
+                3: "Build Income Statement revenue section with growth formulas",
+                4: "Add Income Statement expenses (COGS, OpEx) and profitability calculations",
+                5: "Create Balance Sheet current assets (cash, AR, inventory) with formulas",
+                6: "Add Balance Sheet fixed assets, liabilities, and equity sections",
+                7: "Build Cash Flow Statement with operating, investing, and financing activities",
+                8: "Add integration checks and ensure all statements are properly linked",
+                9: "Apply professional formatting and add key financial metrics/ratios"
+            }
+        else:
+            # DCF model stages (comprehensive DCF methodology)
+            stage_descriptions = {
+                1: "Create DCF model headers and core assumptions (growth rates, margins, WACC inputs)",
+                2: "Build P&L projections with Revenue, EBIT, and EBIAT calculations",
+                3: "Add working capital schedules and CapEx projections",
+                4: "Calculate Unlevered Free Cash Flow (EBIAT + D&A +/- WC - CapEx)",
+                5: "Build Terminal Value using Perpetuity Growth and/or Exit Multiple methods",
+                6: "Create DCF valuation with Present Values, Enterprise Value, and Equity Value per share",
+                7: "Implement WACC calculation and Cost of Equity (CAPM methodology)",
+                8: "Add sensitivity analysis tables (WACC vs Terminal Growth)",
+                9: "Apply professional formatting and validation checks"
+            }
+        
+        return stage_descriptions.get(stage, f"Complete the {model_type} model")
     
     def _format_workbook_context(self, context: Dict[str, Any]) -> str:
         """Format workbook context for better readability"""

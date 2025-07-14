@@ -545,10 +545,15 @@ def clean_generated_code(code: str) -> str:
         print(f"⚠️ Code validation errors found: {validation_errors}")
         cleaned = fix_syntax_errors(cleaned, validation_errors)
     
-    # Final completeness check
+    # Final completeness check and truncation handling
     if not is_code_complete(cleaned):
-        print(f"⚠️ Generated code appears incomplete, attempting to fix...")
-        cleaned = fix_incomplete_code(cleaned)
+        print(f"⚠️ Generated code appears incomplete, attempting to complete...")
+        # First try our new truncation completion
+        cleaned = complete_truncated_code(cleaned)
+        
+        # If still incomplete, try the existing fix
+        if not is_code_complete(cleaned):
+            cleaned = fix_incomplete_code(cleaned)
     
     return cleaned
 
@@ -644,6 +649,55 @@ def fix_syntax_errors(code: str, errors: List[str]) -> str:
     return fixed
 
 
+def complete_truncated_code(code: str) -> str:
+    """Complete truncated JavaScript code to make it executable"""
+    
+    lines = code.split('\n')
+    if not lines:
+        return code
+    
+    last_line = lines[-1].strip()
+    
+    # Handle specific truncation patterns we've seen
+    if '=1/(1+$B$7)^' in last_line:
+        # Complete the discount factor formula
+        if last_line.endswith('^'):
+            lines[-1] = last_line + '3", "=1/(1+$B$7)^4", "=1/(1+$B$7)^5"]]'
+        elif '=1/(1+$B$7)^' in last_line and not last_line.endswith(']]'):
+            # Find where the truncation happened and complete the array
+            lines[-1] = last_line + '"]]'
+    
+    elif 'sheet.getRange(' in last_line and not last_line.endswith(';'):
+        # Complete incomplete getRange statements
+        if '.values = [' in last_line and not last_line.endswith(']]'):
+            lines[-1] = last_line + ']]'
+        elif not last_line.endswith(';'):
+            lines[-1] = last_line + ';'
+    
+    elif last_line.endswith('sheet'):
+        # Remove hanging sheet reference
+        lines = lines[:-1]
+    
+    # Ensure proper Excel.run closure
+    code_str = '\n'.join(lines)
+    
+    # Check if we have Excel.run but missing proper closure
+    if 'Excel.run(async (context) => {' in code_str:
+        open_braces = code_str.count('{')
+        close_braces = code_str.count('}')
+        
+        if open_braces > close_braces:
+            # Add context.sync() if missing
+            if 'context.sync()' not in code_str:
+                code_str += '\n    await context.sync();'
+            
+            # Add missing closing braces
+            missing_braces = open_braces - close_braces
+            code_str += '\n' + '}'.join([''] * (missing_braces + 1))
+    
+    return code_str
+
+
 def is_code_complete(code: str) -> bool:
     """Check if JavaScript code appears to be complete"""
     
@@ -653,21 +707,35 @@ def is_code_complete(code: str) -> bool:
     
     last_line = lines[-1].strip()
     
-    # Check for incomplete statements
+    # Check for incomplete statements (enhanced list)
     incomplete_indicators = [
         'sheet.getRange(',
         'sheet.getRange("',
         'format.',
         'values =',
         'formulas =',
-        '//',  # Incomplete comment
+        '.values = [',
+        '.formulas = [',
+        '=1/(1+$B$7)^',  # Specific to the error we saw
+        'sheet.getRange("A',
+        'sheet.getRange("B',
+        'sheet.getRange("C',
+        '"//',  # Incomplete comment
         '/*',  # Unclosed comment
         'const ',
         'let ',
         'var ',
+        'sheet.',  # Hanging sheet reference
+        'context.',  # Hanging context reference
     ]
     
     if any(last_line.endswith(indicator) for indicator in incomplete_indicators):
+        return False
+    
+    # Check for truncated formulas (common issue)
+    if ('=1/(1+$B$7)^' in last_line or 
+        '=SUM(' in last_line and not ')' in last_line or
+        '="' in last_line and last_line.count('"') % 2 == 1):
         return False
     
     # Check bracket/brace balance
@@ -675,8 +743,12 @@ def is_code_complete(code: str) -> bool:
     close_braces = code.count('}')
     open_parens = code.count('(')
     close_parens = code.count(')')
+    open_brackets = code.count('[')
+    close_brackets = code.count(']')
     
-    if open_braces != close_braces or open_parens != close_parens:
+    if (open_braces != close_braces or 
+        open_parens != close_parens or 
+        open_brackets != close_brackets):
         return False
     
     return True

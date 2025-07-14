@@ -546,7 +546,12 @@ export function shouldUseIncrementalBuild(query: string): boolean {
 export function extractModelType(query: string): string {
   const queryLower = query.toLowerCase();
   
-  if (queryLower.includes('dcf') || queryLower.includes('discounted cash flow')) {
+  if (queryLower.includes('three statement') || queryLower.includes('3 statement') || 
+      queryLower.includes('three-statement') || queryLower.includes('3-statement') ||
+      queryLower.includes('integrated model') || queryLower.includes('income statement') ||
+      queryLower.includes('balance sheet') || queryLower.includes('cash flow statement')) {
+    return 'three-statement';
+  } else if (queryLower.includes('dcf') || queryLower.includes('discounted cash flow')) {
     return 'dcf';
   } else if (queryLower.includes('npv') || queryLower.includes('net present value')) {
     return 'npv';
