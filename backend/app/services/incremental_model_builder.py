@@ -212,6 +212,39 @@ class IncrementalModelBuilder:
         # Update context if provided
         if current_context:
             build_state.workbook_context = current_context
+            print(f"🔍 Updated workbook context - type: {type(current_context)}")
+            print(f"🔍 Raw context keys: {list(current_context.keys()) if isinstance(current_context, dict) else 'Not a dict'}")
+            
+            if isinstance(current_context, dict) and 'sheets' in current_context:
+                sheets = current_context.get('sheets', [])
+                print(f"🔍 Context has {len(sheets)} sheets")
+                
+                for i, sheet in enumerate(sheets[:2]):  # Log first 2 sheets
+                    if isinstance(sheet, dict):
+                        sheet_name = sheet.get('name', 'Unknown')
+                        data = sheet.get('data', [])
+                        
+                        print(f"🔍 Sheet {i+1}: '{sheet_name}'")
+                        print(f"🔍   - data type: {type(data)}")
+                        print(f"🔍   - data length: {len(data) if data is not None else 'None'}")
+                        print(f"🔍   - data is empty list: {data == []}")
+                        print(f"🔍   - data is None: {data is None}")
+                        
+                        if data and len(data) > 0:
+                            print(f"🔍   - first row: {data[0]}")
+                            print(f"🔍   - sample data structure: {data[:2]}")
+                        else:
+                            print(f"🔍   - NO DATA FOUND - this is the core issue!")
+                            # Let's see what other fields the sheet has
+                            print(f"🔍   - sheet keys: {list(sheet.keys())}")
+                            if 'usedRange' in sheet and sheet['usedRange']:
+                                print(f"🔍   - usedRange: {sheet['usedRange']}")
+                    else:
+                        print(f"🔍 Sheet {i+1}: Not a dict - {type(sheet)} = {sheet}")
+            else:
+                print(f"🔍 Context format (no sheets): {current_context}")
+        else:
+            print("🔍 No current_context provided to next-chunk")
         
         # Build context-aware prompt for next chunk
         chunk_prompt = self._build_chunk_prompt(build_state)
@@ -431,6 +464,9 @@ await Excel.run(async (context) => {{
         
         recent_completions = completed_descriptions[-3:] if completed_descriptions else ["None yet"]
         
+        # Extract content placement guidance from workbook context
+        placement_guidance = self._extract_placement_guidance(build_state.workbook_context)
+        
         # Determine total stages based on model type
         model_lower = build_state.financial_model_type.lower()
         if 'three' in model_lower or '3' in model_lower or 'integrated' in model_lower:
@@ -472,8 +508,12 @@ await Excel.run(async (context) => {{
         CURRENT WORKBOOK STATE:
         {self._format_workbook_context(build_state.workbook_context)}
         
+        CONTENT PLACEMENT GUIDANCE:
+        {placement_guidance}
+        
         {progression_requirements}
         4. Focus on {next_stage_description}
+        5. STRICTLY AVOID overwriting existing data - use empty ranges only
         
         PREVIOUS ERRORS TO AVOID:
         {chr(10).join(list(set(build_state.error_patterns))[-2:]) if build_state.error_patterns else "None"}
@@ -559,21 +599,246 @@ await Excel.run(async (context) => {{
         return stage_descriptions.get(stage, f"Complete the {model_type} model")
     
     def _format_workbook_context(self, context: Dict[str, Any]) -> str:
-        """Format workbook context for better readability"""
+        """Format workbook context with detailed content analysis"""
         if not context or not context.get('sheets'):
             return "Empty workbook"
         
-        sheet_info = []
-        for sheet in context.get('sheets', [])[:2]:  # Max 2 sheets
+        sheet_analyses = []
+        for sheet in context.get('sheets', [])[:2]:  # Max 2 sheets  
             name = sheet.get('name', 'Unknown')
             data = sheet.get('data', [])
-            if data and len(data) > 0:
-                row_count = len([row for row in data if row and any(cell for cell in row if cell)])
-                sheet_info.append(f"Sheet '{name}': {row_count} rows with content")
-            else:
-                sheet_info.append(f"Sheet '{name}': empty")
+            
+            if not data or len(data) == 0:
+                sheet_analyses.append(f"Sheet '{name}': completely empty")
+                continue
+                
+            # Analyze content structure and placement
+            analysis = self._analyze_sheet_content(data, name)
+            sheet_analyses.append(analysis)
         
-        return '; '.join(sheet_info)
+        return '\n'.join(sheet_analyses)
+    
+    def _analyze_sheet_content(self, data: List[List], sheet_name: str) -> str:
+        """Analyze sheet content to understand layout and identify content types"""
+        if not data:
+            return f"Sheet '{sheet_name}': empty"
+            
+        # Find populated regions
+        populated_ranges = []
+        content_blocks = []
+        
+        max_row = len(data)
+        max_col = max(len(row) for row in data) if data else 0
+        
+        # Analyze each row for content
+        content_start = None
+        current_block = []
+        
+        for row_idx, row in enumerate(data):
+            if not row:
+                continue
+                
+            # Check if row has content
+            has_content = any(cell and str(cell).strip() for cell in row)
+            
+            if has_content:
+                if content_start is None:
+                    content_start = row_idx
+                    
+                # Analyze row content type
+                row_content = [str(cell).strip() for cell in row if cell and str(cell).strip()]
+                content_type = self._classify_row_content(row_content, row_idx)
+                
+                current_block.append({
+                    'row': row_idx + 1,  # Excel 1-indexed
+                    'content': row_content[:5],  # First 5 non-empty cells
+                    'type': content_type
+                })
+                
+                populated_ranges.append(f"Row {row_idx + 1}")
+            else:
+                # End of content block
+                if current_block:
+                    content_blocks.append(current_block)
+                    current_block = []
+                    content_start = None
+        
+        # Add final block if exists
+        if current_block:
+            content_blocks.append(current_block)
+            
+        # Generate detailed analysis
+        analysis_parts = [f"Sheet '{sheet_name}':"]
+        
+        if not content_blocks:
+            analysis_parts.append("  - No content detected")
+        else:
+            # Analyze content blocks
+            for i, block in enumerate(content_blocks):
+                start_row = block[0]['row']
+                end_row = block[-1]['row']
+                
+                # Classify block type
+                block_types = [item['type'] for item in block]
+                primary_type = max(set(block_types), key=block_types.count)
+                
+                # Sample content from block
+                sample_content = []
+                for item in block[:3]:  # First 3 rows of block
+                    sample_content.extend(item['content'][:3])  # First 3 cells
+                
+                range_desc = f"A{start_row}:Z{end_row}" if end_row > start_row else f"Row {start_row}"
+                analysis_parts.append(f"  - {range_desc}: {primary_type} ({', '.join(sample_content[:5])})")
+        
+        # Find empty regions for suggestions
+        if content_blocks:
+            last_row = content_blocks[-1][-1]['row']
+            if last_row < 30:  # If there's space below
+                analysis_parts.append(f"  - Available space: Row {last_row + 2}+ is empty")
+        else:
+            analysis_parts.append("  - Available space: Entire sheet is empty")
+            
+        return '\n'.join(analysis_parts)
+    
+    def _extract_placement_guidance(self, context: Dict[str, Any]) -> str:
+        """Extract specific placement guidance to avoid content collisions"""
+        if not context or not context.get('sheets'):
+            return "✅ PLACEMENT: Use any range starting from A1"
+        
+        guidance_parts = []
+        
+        for sheet in context.get('sheets', [])[:1]:  # Focus on active sheet
+            name = sheet.get('name', 'Unknown')
+            data = sheet.get('data', [])
+            
+            if not data or len(data) == 0:
+                guidance_parts.append(f"✅ PLACEMENT FOR '{name}': Entire sheet is empty - use any range starting from A1")
+                continue
+            
+            # Generate EXPLICIT cell-by-cell forbidden list
+            forbidden_cells = []
+            occupied_ranges = []
+            last_content_row = 0
+            
+            for row_idx, row in enumerate(data):
+                if row and any(cell and str(cell).strip() for cell in row):
+                    last_content_row = row_idx + 1  # Excel 1-indexed
+                    
+                    # Find occupied columns and generate specific cell addresses
+                    occupied_cols = []
+                    for col_idx, cell in enumerate(row):
+                        if cell and str(cell).strip():
+                            col_letter = chr(65 + col_idx)  # A=65
+                            occupied_cols.append(col_letter)
+                            forbidden_cells.append(f"{col_letter}{row_idx + 1}")
+                    
+                    if occupied_cols:
+                        occupied_ranges.append(f"Row {row_idx + 1}: {occupied_cols[0]}-{occupied_cols[-1]}")
+            
+            if occupied_ranges:
+                # Suggest placement below existing content
+                suggested_start_row = last_content_row + 2  # Leave one empty row
+                
+                guidance_parts.append(f"🚫 FORBIDDEN CELLS IN '{name}' (DO NOT USE THESE SPECIFIC CELLS):")
+                guidance_parts.append(f"   NEVER use: {', '.join(forbidden_cells[:20])}")  # Show first 20 forbidden cells
+                if len(forbidden_cells) > 20:
+                    guidance_parts.append(f"   ... and {len(forbidden_cells) - 20} more occupied cells")
+                
+                guidance_parts.append(f"🚫 OCCUPIED RANGES IN '{name}':")
+                guidance_parts.extend([f"   - {range_desc}" for range_desc in occupied_ranges[:5]])
+                
+                guidance_parts.append(f"✅ SAFE PLACEMENT ZONE: START AT ROW {suggested_start_row} OR LATER")
+                guidance_parts.append(f"✅ RECOMMENDED CELLS: A{suggested_start_row}, B{suggested_start_row}, C{suggested_start_row}, etc.")
+                guidance_parts.append(f"✅ SAFE RANGES: A{suggested_start_row}:Z{suggested_start_row + 10}")
+                
+                # Look for gaps between content blocks
+                content_gaps = self._find_content_gaps(data)
+                if content_gaps:
+                    guidance_parts.append(f"✅ ALTERNATIVE SAFE ZONES: {', '.join(content_gaps)}")
+            else:
+                guidance_parts.append(f"✅ PLACEMENT FOR '{name}': No content detected - use any range")
+        
+        return '\n'.join(guidance_parts) if guidance_parts else "✅ PLACEMENT: Use any range starting from A1"
+    
+    def _find_content_gaps(self, data: List[List]) -> List[str]:
+        """Find empty ranges between content blocks"""
+        if not data:
+            return []
+        
+        gaps = []
+        empty_start = None
+        
+        for row_idx, row in enumerate(data):
+            has_content = row and any(cell and str(cell).strip() for cell in row)
+            
+            if not has_content:
+                if empty_start is None:
+                    empty_start = row_idx + 1  # Excel 1-indexed
+            else:
+                if empty_start is not None:
+                    # Found end of empty block
+                    if row_idx - empty_start + 1 >= 3:  # At least 3 empty rows
+                        gaps.append(f"Rows {empty_start}-{row_idx}")
+                    empty_start = None
+        
+        # Check for trailing empty space
+        if empty_start is not None and len(data) - empty_start + 1 >= 3:
+            gaps.append(f"Rows {empty_start}+")
+        
+        return gaps[:3]  # Return up to 3 gaps
+    
+    def _classify_row_content(self, row_content: List[str], row_index: int) -> str:
+        """Classify what type of content a row contains"""
+        if not row_content:
+            return "empty"
+            
+        # Join content for analysis
+        content_text = ' '.join(row_content).lower()
+        
+        # Header patterns
+        if row_index < 3 and any(term in content_text for term in ['assumptions', 'inputs', 'model', 'dcf', 'financial']):
+            return "model headers"
+        
+        # Assumption patterns
+        if any(term in content_text for term in ['growth', 'rate', 'margin', 'tax', 'discount', 'wacc', 'assumption']):
+            return "assumptions"
+            
+        # Financial statement patterns
+        if any(term in content_text for term in ['revenue', 'sales', 'income', 'expense', 'ebitda', 'ebit']):
+            return "P&L projections"
+            
+        # Cash flow patterns  
+        if any(term in content_text for term in ['cash flow', 'capex', 'working capital', 'fcf', 'unlevered']):
+            return "cash flow"
+            
+        # Valuation patterns
+        if any(term in content_text for term in ['terminal', 'value', 'pv', 'npv', 'enterprise', 'equity']):
+            return "valuation"
+            
+        # Year headers
+        if any(term in content_text for term in ['year', '2024', '2025', '2026', '2027', '2028']):
+            return "year headers"
+            
+        # Check if mostly formulas (contains = signs)
+        if any('=' in item for item in row_content):
+            return "formulas"
+            
+        # Check if mostly numbers
+        numeric_count = sum(1 for item in row_content if self._is_numeric(item))
+        if numeric_count > len(row_content) / 2:
+            return "data values"
+            
+        return "labels/text"
+    
+    def _is_numeric(self, value: str) -> bool:
+        """Check if a string represents a number"""
+        try:
+            # Remove common formatting
+            clean_value = value.replace(',', '').replace('$', '').replace('%', '').strip()
+            float(clean_value)
+            return True
+        except (ValueError, AttributeError):
+            return False
     
     def cleanup_session(self, session_id: str) -> bool:
         """Clean up completed or abandoned sessions"""

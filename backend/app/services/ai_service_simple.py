@@ -1493,9 +1493,11 @@ await Excel.run(async (context) => {
                     
                     # Add sample data if available and not too large
                     data = sheet.get('data', [])
-                print(f"🔍 Backend processing sheet '{sheet_name}' - data type: {type(data)}, length: {len(data) if data else 'None'}")
-                if data:
-                    print(f"🔍 First row sample: {data[0] if len(data) > 0 else 'No first row'}")
+                print(f"🔍 Backend processing sheet '{sheet_name}' - data type: {type(data)}, length: {len(data) if data is not None else 'None'}")
+                if data and len(data) > 0:
+                    print(f"🔍 First row sample: {data[0]}")
+                else:
+                    print(f"🔍 ❌ NO DATA AVAILABLE for sheet '{sheet_name}' - AI will not be context-aware!")
                 
                 if data and len(data) > 0:
                     # Show first few rows/cols of data
@@ -1526,9 +1528,9 @@ await Excel.run(async (context) => {
                         sheet_info += f"\n    ⚠️ Note: All cells appear to be empty or contain default values"
                         
                 elif data is not None and len(data) == 0:
-                    sheet_info += f"\n    📋 Data: Empty sheet (no data array)"
+                    sheet_info += f"\n    📋 Data: Empty sheet (no data array) - USE ENTIRE SHEET STARTING FROM A1"
                 else:
-                    sheet_info += f"\n    📋 Data: No data field provided"
+                    sheet_info += f"\n    📋 Data: No data field provided - USE ENTIRE SHEET STARTING FROM A1"
                 
                 context_parts.append(sheet_info)
         
@@ -1566,7 +1568,21 @@ await Excel.run(async (context) => {
         
         if context_parts:
             full_context = "".join(context_parts)
-            full_context += "\n\n💡 USE THIS CONTEXT: Consider the existing data, structure, and active sheet when generating code."
+            
+            # Check if we have any meaningful data
+            has_meaningful_data = False
+            sheets = workbook_context.get('sheets', [])
+            for sheet in sheets:
+                data = sheet.get('data', []) if isinstance(sheet, dict) else []
+                if data and len(data) > 0:
+                    has_meaningful_data = True
+                    break
+            
+            if has_meaningful_data:
+                full_context += "\n\n💡 USE THIS CONTEXT: Consider the existing data, structure, and active sheet when generating code. AVOID overwriting existing data!"
+            else:
+                full_context += "\n\n⚠️ NO EXISTING DATA DETECTED: You can use the entire sheet starting from A1. No collision avoidance needed."
+            
             return full_context
         
         return ""
@@ -1588,9 +1604,26 @@ await Excel.run(async (context) => {
             print("🚨 MOCK TRIGGER: Claude client is None for chunk generation")
             return self._mock_chunk_response(model_type)
         
-        # Build workbook context string
+        # PRIORITIZE build_context over workbook_context if it contains enhanced analysis
         workbook_context_string = ""
-        if workbook_context:
+        if "WORKBOOK STATE:" in build_context:
+            # Use the enhanced context from incremental builder which includes placement guidance
+            workbook_section = build_context.split("CURRENT WORKBOOK STATE:")[1].split("CONTENT PLACEMENT GUIDANCE:")[0] if "CURRENT WORKBOOK STATE:" in build_context else ""
+            placement_section = build_context.split("CONTENT PLACEMENT GUIDANCE:")[1].split("PROGRESSION REQUIREMENTS:")[0] if "CONTENT PLACEMENT GUIDANCE:" in build_context else ""
+            
+            workbook_context_string = f"""
+📊 CURRENT WORKBOOK ANALYSIS:
+{workbook_section.strip()}
+
+🚫🚫🚫 CRITICAL PLACEMENT INSTRUCTIONS 🚫🚫🚫
+{placement_section.strip()}
+
+*** FOLLOW THESE PLACEMENT INSTRUCTIONS EXACTLY ***
+*** DO NOT PLACE DATA IN OCCUPIED RANGES ***
+*** USE ONLY THE RECOMMENDED EMPTY RANGES ***
+"""
+        elif workbook_context:
+            # Fallback to basic workbook context
             workbook_context_string = self._build_workbook_context_prompt(workbook_context)
         
         # Build error avoidance context
@@ -1608,14 +1641,23 @@ IMPORTANT: Analyze these errors and avoid similar patterns in your code generati
 SYSTEM: You are an expert financial modeling JavaScript code generator. You MUST return ONLY executable JavaScript code with NO explanations, NO markdown, NO analysis text.
 
 🚨 CRITICAL CODE COMPLETION REQUIREMENTS 🚨
-1. ALWAYS complete your code chunks - never end mid-statement
-2. If approaching token limit, prioritize completing current operations
-3. End chunks at logical completion points (after context.sync())
-4. Ensure all opened brackets {{ }} are properly closed
-5. NEVER end with incomplete sheet.getRange() calls
-6. NEVER end with partial string literals or incomplete .values assignments
-7. Complete all lines with proper semicolons
-8. Always close Excel.run() wrapper with context.sync() and closing braces
+1. KEEP CHUNKS SMALL - Maximum 5-10 Excel operations per chunk
+2. ALWAYS complete your code chunks - never end mid-statement
+3. If approaching token limit, STOP EARLY and complete current operations
+4. End chunks at logical completion points (after context.sync())
+5. Ensure all opened brackets {{ }} are properly closed
+6. NEVER end with incomplete sheet.getRange() calls
+7. NEVER end with partial string literals or incomplete .values assignments
+8. Complete all lines with proper semicolons
+9. Always close Excel.run() wrapper with context.sync() and closing braces
+10. SMALL CHUNKS = BETTER RELIABILITY
+
+🚫 CRITICAL COLLISION PREVENTION 🚫
+*** NEVER OVERWRITE EXISTING DATA ***
+*** READ THE WORKBOOK CONTEXT CAREFULLY ***
+*** USE ONLY EMPTY RANGES SPECIFIED IN PLACEMENT GUIDANCE ***
+*** IF NO EMPTY RANGES GIVEN, START AT ROW 30+ TO BE SAFE ***
+*** CHECK FOR EXISTING CONTENT BEFORE PLACING ANYTHING ***
 
 FINANCIAL MODELING STANDARDS:
 - Color code: Blue (#0070C0) inputs, Black (#000000) formulas, Green (#00B050) links
@@ -1641,21 +1683,35 @@ CONTEXT:
 await Excel.run(async (context) => {{
     const sheet = context.workbook.worksheets.getActiveWorksheet();
     
-    // 2-4 Excel operations that ADVANCE the model construction (keep chunks small to avoid truncation)
-    sheet.getRange("A1").values = [["value"]];  // 2D arrays required
-    sheet.getRange("A2").formulas = [["=SUM(A1)"]];  // 2D arrays required
+    // EXAMPLE: If guidance says "FORBIDDEN: A1, A2, B1, B2" and "SAFE ZONE: ROW 15+"
+    // ❌ WRONG: sheet.getRange("A1").values = [["Header"]];  // A1 is forbidden!
+    // ❌ WRONG: sheet.getRange("B2").values = [["Data"]];    // B2 is forbidden!
+    // ✅ CORRECT: Use only safe cells from guidance:
+    sheet.getRange("A15").values = [["DCF Model Header"]];  // Row 15+ is safe
+    sheet.getRange("B15").values = [["Assumptions:"]];      // Row 15+ is safe
+    sheet.getRange("C16").formulas = [["=B15*1.05"]];       // Row 16+ is safe
     
     await context.sync();
 }});
 
 🎯 PROGRESSION REQUIREMENTS:
-- DO NOT repeat headers or assumptions if already created
-- ADVANCE to the next logical section based on context
-- Build DIFFERENT content each time - revenue, expenses, formulas, etc.
-- Each chunk should add NEW functionality to the DCF model
+*** MANDATORY DUPLICATE PREVENTION ***
+- NEVER create the same section twice (e.g., if assumptions exist, don't create more assumptions)
+- NEVER overwrite existing headers, data, or formulas
+- ALWAYS read the workbook context to see what already exists
+- ADVANCE to the next logical section based on what's missing
+- BUILD ONLY missing components: if assumptions exist, build revenue; if revenue exists, build expenses, etc.
+- RESPECT EXISTING LAYOUT: place new content in empty areas only
 
 ⚡ SYNTAX: All .values and .formulas must use 2D arrays: [["value"]]
 🔒 SECURITY: No eval(), no external calls, only Excel.js operations
+
+🚫 CRITICAL RANGE VALIDATION 🚫
+*** MANDATORY: Check placement guidance for FORBIDDEN CELLS before writing ANY code ***
+*** If guidance lists "NEVER use: A1, A2, B1, B2", then DO NOT use getRange("A1"), getRange("A2"), getRange("B1"), getRange("B2") ***
+*** If guidance says "START AT ROW 15", then use getRange("A15"), getRange("B15"), getRange("C15"), etc. ***
+*** LOOK for "SAFE PLACEMENT ZONE" and "RECOMMENDED CELLS" in the guidance ***
+*** EVERY getRange() call must use only SAFE cells from the guidance ***
 
 {self._get_model_sections_prompt(model_type)}
 
@@ -1671,8 +1727,9 @@ Generate complete, executable code starting with await Excel.run and ending with
 """
 
         try:
-            # Use maximum available tokens for complete code generation
+            # Use full token capacity for complete code generation
             max_tokens = MODEL_CONFIGS.get(self.model_name, {}).get("max_output_tokens", 8192)
+            print(f"🔧 Generating chunk with max_tokens: {max_tokens} (full capacity)")
             
             with llm_tracer.trace_llm_call(
                 operation="incremental_chunk_generation",

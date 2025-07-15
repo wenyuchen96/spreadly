@@ -138,8 +138,112 @@ export class IncrementalExecutor {
           return false;
         }
         
-        // Get current Excel context
-        const currentContext = await getComprehensiveWorkbookData();
+        // Get current Excel context - prioritize simple reliable method
+        console.log('🔍 IncrementalExecutor: Getting workbook context with prioritized approach...');
+        let currentContext;
+        
+        // Try the simple reliable method first since it's more likely to work
+        try {
+          const { getActiveSheetDataReliably } = await import('../services/excel-data');
+          const simpleData = await getActiveSheetDataReliably();
+          
+          console.log('🔍 IncrementalExecutor: Simple reliable data extraction:', {
+            dataRows: simpleData.length,
+            sampleData: simpleData.slice(0, 3),
+            hasData: simpleData.length > 0
+          });
+          
+          if (simpleData.length > 0) {
+            // Success with simple method - create proper context structure
+            currentContext = {
+              metadata: {
+                totalSheets: 1,
+                activeSheetName: 'Sheet1',
+                lastModified: new Date().toISOString()
+              },
+              sheets: [{
+                name: 'Sheet1',
+                id: 'sheet1',
+                isActive: true,
+                usedRange: {
+                  address: `A1:Z${simpleData.length}`,
+                  rowCount: simpleData.length,
+                  columnCount: simpleData[0]?.length || 0
+                },
+                data: simpleData,
+                formulas: [],
+                dataTypes: [],
+                hasHeaders: false,
+                tableCount: 0,
+                chartCount: 0
+              }],
+              tables: [],
+              namedRanges: [],
+              summary: {
+                totalCells: simpleData.length * (simpleData[0]?.length || 0),
+                totalUsedCells: simpleData.flat().filter(cell => cell !== null && cell !== '' && cell !== undefined).length,
+                hasFormulas: false,
+                hasCharts: false
+              }
+            };
+            console.log('✅ IncrementalExecutor: Successfully created context with actual data!');
+          } else {
+            throw new Error('Simple method returned no data');
+          }
+        } catch (simpleError) {
+          console.warn('⚠️ IncrementalExecutor: Simple method failed, trying comprehensive...', simpleError);
+          
+          // Fallback to comprehensive method
+          try {
+            currentContext = await getComprehensiveWorkbookData();
+            
+            // Verify we got data
+            const hasAnyData = currentContext?.sheets?.some(s => s.data && s.data.length > 0);
+            console.log('🔍 IncrementalExecutor: Comprehensive method result:', {
+              hasSheets: currentContext?.sheets?.length || 0,
+              hasAnyData,
+              sheetsData: currentContext?.sheets?.map(s => ({
+                name: s.name,
+                dataLength: s.data?.length || 0
+              }))
+            });
+            
+            if (!hasAnyData) {
+              throw new Error('Comprehensive method returned no data');
+            }
+          } catch (comprehensiveError) {
+            console.error('❌ IncrementalExecutor: Both methods failed, using empty context:', comprehensiveError);
+            
+            // Last resort: empty but properly structured context
+            currentContext = {
+              metadata: {
+                totalSheets: 1,
+                activeSheetName: 'Sheet1',
+                lastModified: new Date().toISOString()
+              },
+              sheets: [{
+                name: 'Sheet1',
+                id: 'sheet1',
+                isActive: true,
+                usedRange: null,
+                data: [],
+                formulas: [],
+                dataTypes: [],
+                hasHeaders: false,
+                tableCount: 0,
+                chartCount: 0
+              }],
+              tables: [],
+              namedRanges: [],
+              summary: {
+                totalCells: 0,
+                totalUsedCells: 0,
+                hasFormulas: false,
+                hasCharts: false
+              }
+            };
+          }
+        }
         
         // Report previous chunk result if we have one
         let lastResult = null;
