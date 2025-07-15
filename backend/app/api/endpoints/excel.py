@@ -168,18 +168,41 @@ async def query_spreadsheet(
     ai_service = AIService()
     result = await ai_service.process_natural_language_query(session.id, query, workbook_context)
     
-    # Check if result is raw JavaScript code (for financial models)
-    if isinstance(result, str) and 'Excel.run' in result:
-        print("🔍 Backend: Detected raw JavaScript financial model response")
+    # Handle different response types properly
+    if isinstance(result, dict) and "text" in result and "token_usage" in result:
+        # New format with token information (both code execution and regular queries)
+        text_content = result["text"]
+        
+        # Check if this is JavaScript code (for financial models and Excel operations)
+        if 'Excel.run' in text_content:
+            print("🔍 Backend: Detected JavaScript code execution response with tokens")
+            return {
+                "session_token": session_token,
+                "query": query,
+                "result": text_content,  # Return raw JavaScript code directly
+                "token_usage": result["token_usage"]
+            }
+        else:
+            # Regular text response with tokens
+            print("🔍 Backend: Detected regular text response with tokens")
+            return {
+                "session_token": session_token,
+                "query": query,
+                "result": {
+                    "answer": text_content
+                },
+                "token_usage": result["token_usage"]
+            }
+    elif isinstance(result, str) and 'Excel.run' in result:
+        # Legacy: raw JavaScript code (old format without tokens)
+        print("🔍 Backend: Detected raw JavaScript financial model response (legacy)")
         return {
             "session_token": session_token,
             "query": query,
             "result": result  # Return raw JavaScript code directly
         }
-    
-    # Handle different response types properly
-    if isinstance(result, str):
-        # Plain text response from AI - wrap it in expected structure
+    elif isinstance(result, str):
+        # Legacy: Plain text response from AI (old format) - wrap it in expected structure
         return {
             "session_token": session_token,
             "query": query,
@@ -223,16 +246,30 @@ async def web_search_query(
         
         # Handle web search response properly
         if isinstance(result, str):
+            # Old format - plain text
             formatted_result = {"answer": result}
+            token_info = None
+        elif isinstance(result, dict) and "text" in result and "token_usage" in result:
+            # New format with token information
+            formatted_result = {"answer": result["text"]}
+            token_info = result["token_usage"]
         else:
+            # Other structured response
             formatted_result = result
+            token_info = None
             
-        return {
+        response_data = {
             "query": query,
             "result": formatted_result,
             "web_search_enabled": True,
             "session_token": session_token
         }
+        
+        # Add token information if available
+        if token_info:
+            response_data["token_usage"] = token_info
+            
+        return response_data
     except Exception as e:
         print(f"🚨 Web search error: {e}")
         raise HTTPException(status_code=500, detail=f"Web search failed: {str(e)}")

@@ -778,11 +778,26 @@ class AIService:
                         lines = lines[:-1]  # Remove last line
                     cleaned_code = '\n'.join(lines)
                 
-                return cleaned_code  # Return raw code string
+                # Return code with token information for progress indicator
+                return {
+                    "text": cleaned_code,
+                    "token_usage": {
+                        "input_tokens": getattr(api_response.usage, 'input_tokens', None),
+                        "output_tokens": getattr(api_response.usage, 'output_tokens', None),
+                        "total_tokens": getattr(api_response.usage, 'input_tokens', 0) + getattr(api_response.usage, 'output_tokens', 0)
+                    }
+                }
             
-            # For regular queries, return clean text response
+            # For regular queries, return response with token information
             print("🔍 Processing regular text response")
-            return result_text.strip()
+            return {
+                "text": result_text.strip(),
+                "token_usage": {
+                    "input_tokens": getattr(api_response.usage, 'input_tokens', None),
+                    "output_tokens": getattr(api_response.usage, 'output_tokens', None),
+                    "total_tokens": getattr(api_response.usage, 'input_tokens', 0) + getattr(api_response.usage, 'output_tokens', 0)
+                }
+            }
         except Exception as e:
             error_message = f"An unexpected error occurred: {str(e)}"
             if isinstance(e, APIError):
