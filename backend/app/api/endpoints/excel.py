@@ -177,11 +177,23 @@ async def query_spreadsheet(
             "result": result  # Return raw JavaScript code directly
         }
     
-    return {
-        "session_token": session_token,
-        "query": query,
-        "result": result
-    }
+    # Handle different response types properly
+    if isinstance(result, str):
+        # Plain text response from AI - wrap it in expected structure
+        return {
+            "session_token": session_token,
+            "query": query,
+            "result": {
+                "answer": result
+            }
+        }
+    else:
+        # Structured response (dict) - return as-is
+        return {
+            "session_token": session_token,
+            "query": query,
+            "result": result
+        }
 
 @router.post("/web-search")
 async def web_search_query(
@@ -209,9 +221,15 @@ async def web_search_query(
             workbook_context=None
         )
         
+        # Handle web search response properly
+        if isinstance(result, str):
+            formatted_result = {"answer": result}
+        else:
+            formatted_result = result
+            
         return {
             "query": query,
-            "result": result,
+            "result": formatted_result,
             "web_search_enabled": True,
             "session_token": session_token
         }
