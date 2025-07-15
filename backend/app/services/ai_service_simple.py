@@ -606,15 +606,11 @@ class AIService:
             
             {workbook_context_string}
             
-            Provide a clear, actionable answer. If the question requires a formula,
-            provide the Excel formula. If it requires analysis, provide the analysis.
+            Provide a clear, direct answer. If the question requires a formula, provide the Excel formula.
+            If it requires analysis, provide the analysis. Keep your response conversational and helpful.
             
-            Format your response as JSON with:
-            - answer: the main answer
-            - formula: Excel formula if applicable
-            - explanation: detailed explanation
-            - next_steps: suggested next steps
-            - execute_code: false
+            DO NOT format as JSON. DO NOT include sections like "formula:", "explanation:", "next_steps:".
+            Just provide a natural, helpful response.
             """
         
         try:
@@ -666,7 +662,7 @@ class AIService:
                         
                         # Add web search if enabled for this query
                         if needs_web_search:
-                            message_params["tools"] = [{"type": "web_search"}]
+                            message_params["tools"] = [{"type": "web_search_20250305"}]
                             print(f"🌐 Web search enabled for query: {query[:100]}...")
                         
                         api_response = await self.client.messages.create(**message_params)
@@ -764,45 +760,9 @@ class AIService:
                 
                 return cleaned_code  # Return raw code string
             
-            # For regular queries, parse as JSON
-            try:
-                # Find the first '{' and the last '}' to extract the JSON object.
-                match = re.search(r'\{.*\}', result_text, re.DOTALL)
-                if not match:
-                    raise json.JSONDecodeError("No JSON object found in the response", result_text, 0)
-                
-                json_str = match.group(0)
-                
-                # Extract code block manually and replace with properly escaped JSON
-                # This handles cases where the LLM uses markdown for code instead of a JSON string.
-                code_pattern = r'"code":\s*```(?:javascript|js)?\s*(.*?)```'
-                code_match = re.search(code_pattern, json_str, re.DOTALL)
-                
-                if code_match:
-                    # The content inside the backticks
-                    code_content = code_match.group(1).strip()
-                    print(f"🔍 Extracted raw code block: {len(code_content)} chars")
-                    
-                    # Escape the raw code so it's a valid JSON string value
-                    escaped_code = json.dumps(code_content)
-                    
-                    # Replace the entire markdown block with a valid JSON key-value pair
-                    json_str = re.sub(code_pattern, f'"code": {escaped_code}', json_str, flags=re.DOTALL, count=1)
-                
-                parsed_response = json.loads(json_str)
-                print("✅ JSON parsing successful")
-                return parsed_response
-            except json.JSONDecodeError as json_error:
-                print(f"🚨 JSON parsing failed: {json_error}. Raw response: {result_text}")
-                # If parsing fails, we return a clear error to the user instead of
-                # trying to manually extract potentially broken code.
-                return {
-                    "answer": "The AI returned a response that was not in the correct format. Please try your request again.",
-                    "code": None,
-                    "execute_code": False,
-                    "explanation": f"The AI response could not be parsed as valid JSON. Raw preview: {result_text[:200]}...",
-                    "next_steps": ["Try rephrasing your request.", "If the problem persists, check the backend logs."]
-                }
+            # For regular queries, return clean text response
+            print("🔍 Processing regular text response")
+            return result_text.strip()
         except Exception as e:
             error_message = f"An unexpected error occurred: {str(e)}"
             if isinstance(e, APIError):

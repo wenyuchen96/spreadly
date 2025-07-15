@@ -200,7 +200,7 @@ async def web_search_query(
     ai_service = AIService()
     
     # Force web search for this endpoint by temporarily modifying the query
-    web_enhanced_query = f"Please search the web for current information about: {query}"
+    web_enhanced_query = f"Please search the web for current information about: {query}. Provide a clear, direct answer without JSON formatting."
     
     try:
         result = await ai_service.process_natural_language_query(
