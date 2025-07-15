@@ -662,10 +662,18 @@ class AIService:
                         
                         # Add web search if enabled for this query
                         if needs_web_search:
-                            message_params["tools"] = [{"type": "web_search_20250305"}]
+                            message_params["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
                             print(f"🌐 Web search enabled for query: {query[:100]}...")
                         
                         api_response = await self.client.messages.create(**message_params)
+                        
+                        # Calculate total response length safely
+                        total_response_length = 0
+                        response_preview = ""
+                        for content_block in api_response.content:
+                            if hasattr(content_block, 'text'):
+                                total_response_length += len(content_block.text)
+                                response_preview += content_block.text[:500]
                         
                         # Add success metrics to trace
                         llm_tracer.trace_llm_metrics(
@@ -673,7 +681,7 @@ class AIService:
                             prompt_tokens=getattr(api_response.usage, 'input_tokens', None),
                             completion_tokens=getattr(api_response.usage, 'output_tokens', None),
                             total_tokens=getattr(api_response.usage, 'input_tokens', 0) + getattr(api_response.usage, 'output_tokens', 0),
-                            response_length=len(api_response.content[0].text),
+                            response_length=total_response_length,
                             attempts_used=attempt + 1,
                             final_success=True,
                             rag_models_used=len(retrieved_models)
@@ -685,7 +693,7 @@ class AIService:
                             operation="claude_api_call",
                             model=self.model_name,
                             prompt=prompt[:500],
-                            response=api_response.content[0].text[:500],
+                            response=response_preview[:500],
                             duration=0,  # Will be calculated later
                             success=True,
                             rag_used=len(retrieved_models) > 0,
@@ -739,7 +747,19 @@ class AIService:
                 # This custom exception will be caught by the outer block
                 raise Exception("API call failed after all retries due to persistent overloading or other issues.")
             
-            result_text = api_response.content[0].text
+            # Extract text from the response content (handle both text blocks and tool use blocks)
+            result_text = ""
+            for content_block in api_response.content:
+                if hasattr(content_block, 'text'):
+                    result_text += content_block.text
+                elif hasattr(content_block, 'type') and content_block.type == 'tool_use':
+                    # This is a tool use block - Claude used web search
+                    print(f"🌐 Tool used: {content_block.name}")
+                    # The actual response text will be in subsequent text blocks
+                    continue
+                else:
+                    print(f"🔍 Unknown content block type: {type(content_block)}")
+            
             print(f"🔍 Raw Claude response length: {len(result_text)} chars")
             print(f"🔍 Raw response preview: {result_text[:200]}...")
             
