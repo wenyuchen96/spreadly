@@ -205,6 +205,34 @@ class SpreadlyAPI {
   setSessionToken(token: string): void {
     this.sessionToken = token;
   }
+
+  /**
+   * Perform web search enhanced query
+   */
+  async webSearch(query: string, sessionToken?: string): Promise<any> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/excel/web-search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
+        },
+        body: JSON.stringify({
+          query: query,
+          session_token: sessionToken || this.sessionToken
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error performing web search:', error);
+      throw error;
+    }
+  }
 }
 
 export const spreadlyAPI = new SpreadlyAPI(BASE_URL);

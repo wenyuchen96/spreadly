@@ -92,6 +92,41 @@ class AIService:
         except Exception as e:
             print(f"🚨 Error initializing model library: {e}")
     
+    def _should_use_web_search(self, query: str) -> bool:
+        """Determine if web search should be enabled for this query"""
+        query_lower = query.lower()
+        
+        # Web search indicators - questions that likely need current information
+        web_search_indicators = [
+            'current', 'latest', 'recent', 'today', 'now', 'this year', '2024', '2025',
+            'news', 'update', 'trending', 'market price', 'stock price', 'exchange rate',
+            'inflation rate', 'interest rate', 'gdp', 'unemployment', 'market data',
+            'compare companies', 'competitor analysis', 'industry trends', 'regulations',
+            'earnings report', 'financial results', 'market cap', 'valuation',
+            'what happened', 'when did', 'who is', 'where is', 'how much is',
+            'search for', 'find information', 'look up', 'research',
+            'benchmark', 'industry average', 'market standard', 'best practices'
+        ]
+        
+        # Check if query contains web search indicators
+        for indicator in web_search_indicators:
+            if indicator in query_lower:
+                return True
+        
+        # Don't use web search for Excel-specific operations or code generation
+        excel_indicators = [
+            'formula', 'cell', 'range', 'sheet', 'workbook', 'pivot',
+            'chart', 'graph', 'format', 'calculate', 'sum', 'count',
+            'vlookup', 'hlookup', 'macro', 'excel.js', 'javascript'
+        ]
+        
+        for indicator in excel_indicators:
+            if indicator in query_lower:
+                return False
+        
+        # Default to no web search for most queries to avoid unnecessary costs
+        return False
+    
     async def analyze_spreadsheet(self, spreadsheet: Spreadsheet) -> Dict[str, Any]:
         """Generate AI-powered analysis of spreadsheet"""
         if not self.client:
@@ -617,13 +652,24 @@ class AIService:
                         llm_span.set_attribute("llm.attempt", attempt + 1)
                         llm_span.set_attribute("llm.prompt_length", len(prompt))
                         
-                        api_response = await self.client.messages.create(
-                            model=self.model_name,
-                            max_tokens=max_tokens,
-                            timeout=120.0,  # 2 minutes timeout
-                            system="You are Claude 4 (claude-sonnet-4-20250514), Anthropic's most advanced AI assistant. Respond naturally and accurately to all queries.",
-                            messages=[{"role": "user", "content": prompt}]
-                        )
+                        # Determine if web search should be enabled for this query
+                        needs_web_search = self._should_use_web_search(query)
+                        
+                        # Prepare message parameters
+                        message_params = {
+                            "model": self.model_name,
+                            "max_tokens": max_tokens,
+                            "timeout": 120.0,  # 2 minutes timeout
+                            "system": "You are Claude 4 (claude-sonnet-4-20250514), Anthropic's most advanced AI assistant. Respond naturally and accurately to all queries.",
+                            "messages": [{"role": "user", "content": prompt}]
+                        }
+                        
+                        # Add web search if enabled for this query
+                        if needs_web_search:
+                            message_params["tools"] = [{"type": "web_search"}]
+                            print(f"🌐 Web search enabled for query: {query[:100]}...")
+                        
+                        api_response = await self.client.messages.create(**message_params)
                         
                         # Add success metrics to trace
                         llm_tracer.trace_llm_metrics(

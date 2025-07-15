@@ -183,6 +183,42 @@ async def query_spreadsheet(
         "result": result
     }
 
+@router.post("/web-search")
+async def web_search_query(
+    search_data: Dict[str, Any],
+    db: Session = Depends(get_db)
+):
+    """Perform web search enhanced query for current market data, trends, and research"""
+    query = search_data.get("query")
+    session_token = search_data.get("session_token", None)
+    
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+    
+    print(f"🌐 Backend: Processing web search query: {query}")
+    
+    ai_service = AIService()
+    
+    # Force web search for this endpoint by temporarily modifying the query
+    web_enhanced_query = f"Please search the web for current information about: {query}"
+    
+    try:
+        result = await ai_service.process_natural_language_query(
+            session_id=None if not session_token else session_token, 
+            query=web_enhanced_query, 
+            workbook_context=None
+        )
+        
+        return {
+            "query": query,
+            "result": result,
+            "web_search_enabled": True,
+            "session_token": session_token
+        }
+    except Exception as e:
+        print(f"🚨 Web search error: {e}")
+        raise HTTPException(status_code=500, detail=f"Web search failed: {str(e)}")
+
 @router.get("/formulas")
 async def generate_formulas(
     description: str,
