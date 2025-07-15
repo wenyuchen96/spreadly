@@ -430,8 +430,8 @@ function initializeChat() {
         const currentMessage = this.humanMessages[this.currentMessageIndex] || this.humanMessages[0];
         const tokenDisplay = this.formatTokenCount(this.currentTokenCount);
         
-        // Always show token count (starts at 0, animates up)
-        this.messageElement.innerHTML = `${currentMessage} (${elapsed}s • ${tokenDisplay} tokens • <b>esc</b> to interrupt)`;
+        // Temporarily hide token count for video
+        this.messageElement.innerHTML = `${currentMessage} (${elapsed}s • <b>esc</b> to interrupt)`;
       }
     }
 
