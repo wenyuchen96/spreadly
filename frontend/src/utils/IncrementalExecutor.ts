@@ -50,9 +50,22 @@ export class IncrementalExecutor {
   private progressCallback?: ProgressCallback;
   private chunkCallback?: ChunkCallback;
   private errorCallback?: ErrorCallback;
+  private totalInputTokens: number = 0;
+  private totalOutputTokens: number = 0;
   
   constructor(sessionToken: string) {
     this.sessionToken = sessionToken;
+  }
+
+  /**
+   * Get accumulated token usage from all API calls
+   */
+  getTokenUsage() {
+    return {
+      input_tokens: this.totalInputTokens,
+      output_tokens: this.totalOutputTokens,
+      total_tokens: this.totalInputTokens + this.totalOutputTokens
+    };
   }
   
   /**
@@ -242,7 +255,16 @@ export class IncrementalExecutor {
       throw new Error(`Failed to get next chunk: ${response.statusText}`);
     }
     
-    return await response.json();
+    const result = await response.json();
+    
+    // Extract and accumulate token information
+    if (result.token_usage) {
+      this.totalInputTokens += result.token_usage.input_tokens || 0;
+      this.totalOutputTokens += result.token_usage.output_tokens || 0;
+      console.log(`🔢 Tokens accumulated: ${this.totalInputTokens} input + ${this.totalOutputTokens} output = ${this.totalInputTokens + this.totalOutputTokens} total`);
+    }
+    
+    return result;
   }
   
   /**

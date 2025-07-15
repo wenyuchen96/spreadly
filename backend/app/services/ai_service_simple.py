@@ -1579,7 +1579,7 @@ await Excel.run(async (context) => {
         build_context: str,
         workbook_context: Dict[str, Any] = None,
         previous_errors: List[str] = None
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Generate a single optimized code chunk for incremental model building"""
         
         print(f"🔧 Generating incremental chunk for {model_type} model")
@@ -1612,6 +1612,10 @@ SYSTEM: You are an expert financial modeling JavaScript code generator. You MUST
 2. If approaching token limit, prioritize completing current operations
 3. End chunks at logical completion points (after context.sync())
 4. Ensure all opened brackets {{ }} are properly closed
+5. NEVER end with incomplete sheet.getRange() calls
+6. NEVER end with partial string literals or incomplete .values assignments
+7. Complete all lines with proper semicolons
+8. Always close Excel.run() wrapper with context.sync() and closing braces
 
 FINANCIAL MODELING STANDARDS:
 - Color code: Blue (#0070C0) inputs, Black (#000000) formulas, Green (#00B050) links
@@ -1711,11 +1715,26 @@ Generate complete, executable code starting with await Excel.run and ending with
                     chunk_code = '\n'.join(lines[1:-1]) if len(lines) > 2 else chunk_code
                 
                 print(f"✅ Generated chunk ({len(chunk_code)} characters)")
-                return chunk_code
+                return {
+                    "code": chunk_code,
+                    "token_usage": {
+                        "input_tokens": getattr(api_response.usage, 'input_tokens', None),
+                        "output_tokens": getattr(api_response.usage, 'output_tokens', None),
+                        "total_tokens": getattr(api_response.usage, 'input_tokens', 0) + getattr(api_response.usage, 'output_tokens', 0)
+                    }
+                }
                 
         except Exception as e:
             print(f"❌ Error generating incremental chunk: {e}")
-            return self._mock_chunk_response(model_type)
+            mock_code = self._mock_chunk_response(model_type)
+            return {
+                "code": mock_code,
+                "token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0
+                }
+            }
     
     def _mock_chunk_response(self, model_type: str) -> str:
         """Fallback chunk generation when AI is unavailable"""

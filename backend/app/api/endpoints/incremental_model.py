@@ -216,6 +216,8 @@ async def generate_next_chunk(
         
         print(f"🔧 Generated chunk {chunk.id} ({chunk.type.value}, {chunk.complexity.value})")
         
+        progress_data = incremental_builder.get_build_progress(session_token)
+        
         return {
             "success": True,
             "completed": False,
@@ -228,7 +230,8 @@ async def generate_next_chunk(
                 "estimated_operations": chunk.estimated_operations,
                 "stage": chunk.stage
             },
-            "progress": incremental_builder.get_build_progress(session_token)
+            "progress": progress_data,
+            "token_usage": progress_data.get("token_usage", {}) if progress_data else {}
         }
         
     except Exception as e:
@@ -674,9 +677,25 @@ def complete_truncated_code(code: str) -> str:
         elif not last_line.endswith(';'):
             lines[-1] = last_line + ';'
     
+    elif last_line.endswith('sheet.get'):
+        # Complete hanging sheet.get references
+        lines[-1] = last_line.replace('sheet.get', 'sheet.getRange("A1").values = [[""]];')
+    
+    elif last_line.endswith('sheet.getRange(\"'):
+        # Complete hanging getRange calls
+        lines[-1] = last_line + 'A1\").values = [[\"\"]];'
+    
+    elif last_line.endswith('shee'):
+        # Complete truncated 'sheet' references
+        lines[-1] = last_line.replace('shee', 'sheet.getRange("A1").values = [[""]];')
+    
     elif last_line.endswith('sheet'):
         # Remove hanging sheet reference
         lines = lines[:-1]
+    
+    elif last_line.endswith('.values = [['):
+        # Complete truncated values assignment
+        lines[-1] = last_line + '""]]';
     
     # Ensure proper Excel.run closure
     code_str = '\n'.join(lines)
@@ -711,11 +730,15 @@ def is_code_complete(code: str) -> bool:
     incomplete_indicators = [
         'sheet.getRange(',
         'sheet.getRange("',
+        'sheet.get',  # Truncated getRange
+        'shee',  # Truncated sheet
         'format.',
         'values =',
         'formulas =',
         '.values = [',
         '.formulas = [',
+        '.values = [[',  # Incomplete array start
+        '.formulas = [[',  # Incomplete array start  
         '=1/(1+$B$7)^',  # Specific to the error we saw
         'sheet.getRange("A',
         'sheet.getRange("B',
@@ -727,6 +750,10 @@ def is_code_complete(code: str) -> bool:
         'var ',
         'sheet.',  # Hanging sheet reference
         'context.',  # Hanging context reference
+        '"Year ',  # Incomplete string literals
+        '.format',  # Incomplete format calls
+        '.font',  # Incomplete font calls
+        '.fill',  # Incomplete fill calls
     ]
     
     if any(last_line.endswith(indicator) for indicator in incomplete_indicators):

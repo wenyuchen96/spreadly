@@ -718,13 +718,24 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
           }
         );
         
+        // Get accumulated token information from incremental executor
+        const tokenUsage = incrementalExecutor.getTokenUsage();
+        const incrementalTokenInfo = {
+          input_tokens: tokenUsage.input_tokens,
+          output_tokens: tokenUsage.output_tokens,
+          total_tokens: tokenUsage.total_tokens
+        };
+        
+        console.log('🔢 Incremental building token usage:', incrementalTokenInfo);
+        
         if (success) {
           aiMessage = `✅ **${modelType.toUpperCase()} Model Built Successfully!**\n\nThe model was created using incremental building with enhanced stability.\n\n**Build Process:**\n${progressMessages.slice(-5).join('\n')}\n\n🎉 Your financial model is ready for use!`;
         } else {
           aiMessage = `❌ **Model Building Failed**\n\nThe incremental build process encountered issues.\n\n**Build Log:**\n${progressMessages.slice(-5).join('\n')}\n\nPlease try again or contact support.`;
         }
         
-        return { message: aiMessage, execute: false, tokenInfo: tokenInfo };
+        // Use incremental token info instead of the original query token info
+        return { message: aiMessage, execute: false, tokenInfo: incrementalTokenInfo };
         
       } catch (error) {
         console.error('❌ Incremental building failed:', error);

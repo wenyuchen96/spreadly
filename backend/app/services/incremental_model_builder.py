@@ -48,6 +48,7 @@ class CodeChunk:
     status: ExecutionStatus = ExecutionStatus.PENDING
     execution_attempts: int = 0
     error_history: List[str] = field(default_factory=list)
+    token_usage: Dict[str, int] = field(default_factory=dict)
     execution_time: Optional[float] = None
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -65,6 +66,8 @@ class ModelBuildState:
     last_successful_context: Dict[str, Any] = field(default_factory=dict)
     error_patterns: List[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=datetime.now)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
     
     @property
     def progress_percentage(self) -> float:
@@ -219,14 +222,20 @@ class IncrementalModelBuilder:
         try:
             # Call AI service to generate the actual chunk
             print(f"🔧 Calling AI service for chunk generation...")
-            chunk_code = await ai_service.generate_incremental_chunk(
+            chunk_result = await ai_service.generate_incremental_chunk(
                 session_id=0,  # Placeholder session ID
                 model_type=build_state.financial_model_type,
                 build_context=chunk_prompt,
                 workbook_context=build_state.workbook_context,
                 previous_errors=build_state.error_patterns[-3:] if build_state.error_patterns else None
             )
+            
+            # Extract code and token information
+            chunk_code = chunk_result.get("code", "") if isinstance(chunk_result, dict) else chunk_result
+            token_usage = chunk_result.get("token_usage", {}) if isinstance(chunk_result, dict) else {}
             print(f"✅ AI generated chunk code ({len(chunk_code)} chars)")
+            if token_usage:
+                print(f"🔢 Token usage: {token_usage.get('input_tokens', 0)} input + {token_usage.get('output_tokens', 0)} output = {token_usage.get('total_tokens', 0)} total")
         except Exception as e:
             print(f"❌ AI chunk generation failed, using fallback: {e}")
             import traceback
@@ -255,8 +264,14 @@ await Excel.run(async (context) => {{
             code=cleaned_chunk_code,
             description=f"Generated chunk {chunk_id} for {build_state.financial_model_type}",
             stage=len(build_state.chunks),
-            estimated_operations=self.chunk_generator.estimate_operations(cleaned_chunk_code)
+            estimated_operations=self.chunk_generator.estimate_operations(cleaned_chunk_code),
+            token_usage=token_usage
         )
+        
+        # Update build state with token information
+        if token_usage:
+            build_state.total_input_tokens += token_usage.get('input_tokens', 0)
+            build_state.total_output_tokens += token_usage.get('output_tokens', 0)
         
         # Add to build state
         build_state.chunks[chunk_id] = chunk
@@ -390,7 +405,12 @@ await Excel.run(async (context) => {{
             'current_chunk_id': build_state.current_chunk_id,
             'execution_history': build_state.execution_history[-10:],  # Last 10 entries
             'error_patterns': list(set(build_state.error_patterns)),  # Unique errors
-            'elapsed_time': (datetime.now() - build_state.started_at).total_seconds()
+            'elapsed_time': (datetime.now() - build_state.started_at).total_seconds(),
+            'token_usage': {
+                'input_tokens': build_state.total_input_tokens,
+                'output_tokens': build_state.total_output_tokens,
+                'total_tokens': build_state.total_input_tokens + build_state.total_output_tokens
+            }
         }
     
     def _build_chunk_prompt(self, build_state: ModelBuildState) -> str:
