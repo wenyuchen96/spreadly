@@ -258,10 +258,23 @@ export class IncrementalExecutor {
     const result = await response.json();
     
     // Extract and accumulate token information
+    console.log('🔍 Checking result for token_usage:', {
+      hasTokenUsage: !!result.token_usage,
+      resultKeys: Object.keys(result),
+      tokenUsageData: result.token_usage
+    });
+    
     if (result.token_usage) {
-      this.totalInputTokens += result.token_usage.input_tokens || 0;
-      this.totalOutputTokens += result.token_usage.output_tokens || 0;
-      console.log(`🔢 Tokens accumulated: ${this.totalInputTokens} input + ${this.totalOutputTokens} output = ${this.totalInputTokens + this.totalOutputTokens} total`);
+      const inputTokens = result.token_usage.input_tokens || 0;
+      const outputTokens = result.token_usage.output_tokens || 0;
+      
+      this.totalInputTokens += inputTokens;
+      this.totalOutputTokens += outputTokens;
+      
+      console.log(`🔢 Tokens accumulated: +${inputTokens} input, +${outputTokens} output`);
+      console.log(`🔢 Total so far: ${this.totalInputTokens} input + ${this.totalOutputTokens} output = ${this.totalInputTokens + this.totalOutputTokens} total`);
+    } else {
+      console.log('❌ No token_usage found in result');
     }
     
     return result;

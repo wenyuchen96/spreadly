@@ -174,7 +174,8 @@ async def generate_next_chunk(
                         "estimated_operations": fixed_chunk.estimated_operations,
                         "stage": fixed_chunk.stage
                     },
-                    "progress": progress
+                    "progress": progress,
+                    "token_usage": progress.get("token_usage", {}) if progress else {}
                 }
         
         # Check if build is complete or should stop due to too many failures
@@ -186,6 +187,7 @@ async def generate_next_chunk(
                 "success": True,
                 "completed": True,
                 "progress": progress,
+                "token_usage": progress.get("token_usage", {}) if progress else {},
                 "message": f"Build stopped due to excessive failures. Success rate: {progress['success_rate']:.1f}%"
             }
         
@@ -195,6 +197,7 @@ async def generate_next_chunk(
                 "success": True,
                 "completed": True,
                 "progress": progress,
+                "token_usage": progress.get("token_usage", {}) if progress else {},
                 "message": f"Model building completed! Success rate: {progress['success_rate']:.1f}%"
             }
         
@@ -471,13 +474,22 @@ CORRECTED CODE:"""
         print(f"🔍 Analyzing error for chunk {chunk_id}: {error_details.get('message', error_message)[:100]}...")
         
         # Use AI to analyze and fix the error
-        fixed_code = await ai_service.generate_incremental_chunk(
+        fix_result = await ai_service.generate_incremental_chunk(
             session_id=0,
             model_type="error_fix",
             build_context=error_analysis_prompt,
             workbook_context=current_context,
             previous_errors=[error_message]
         )
+        
+        # Extract code from the result (handle both old string format and new dict format)
+        if isinstance(fix_result, dict):
+            fixed_code = fix_result.get("code", "")
+            token_info = fix_result.get("token_usage", {})
+            print(f"🔢 Error fix tokens: {token_info.get('input_tokens', 0)} input + {token_info.get('output_tokens', 0)} output")
+        else:
+            fixed_code = fix_result
+            token_info = {}
         
         # Clean the fixed code
         cleaned_code = clean_generated_code(fixed_code)

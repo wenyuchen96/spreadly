@@ -121,14 +121,26 @@ function initializeChat() {
       const response = await processUserMessage(message, scriptLabEngine);
       
       // Update progress indicator with token info if available
-      console.log('🔍 Response token info:', response.tokenInfo);
-      if (currentProgressIndicator && response.tokenInfo && response.tokenInfo.input_tokens && response.tokenInfo.output_tokens) {
-        console.log('✅ Updating progress with tokens:', response.tokenInfo.input_tokens, '+', response.tokenInfo.output_tokens);
-        currentProgressIndicator.updateWithTokens(response.tokenInfo.input_tokens, response.tokenInfo.output_tokens);
+      console.log('🔍 Final response token info analysis:', {
+        hasTokenInfo: !!response.tokenInfo,
+        tokenInfo: response.tokenInfo,
+        hasProgressIndicator: !!currentProgressIndicator,
+        tokenStructure: response.tokenInfo ? Object.keys(response.tokenInfo) : 'no tokenInfo'
+      });
+      
+      if (currentProgressIndicator && response.tokenInfo && (response.tokenInfo.input_tokens || response.tokenInfo.output_tokens || response.tokenInfo.total_tokens)) {
+        const inputTokens = response.tokenInfo.input_tokens || 0;
+        const outputTokens = response.tokenInfo.output_tokens || 0;
+        console.log('✅ Updating progress indicator with tokens:', inputTokens, '+', outputTokens, '=', inputTokens + outputTokens);
+        currentProgressIndicator.updateWithTokens(inputTokens, outputTokens);
         // Give a moment to show the token count
         await new Promise(resolve => setTimeout(resolve, 1000));
       } else {
-        console.log('❌ No token info or missing currentProgressIndicator');
+        console.log('❌ Cannot update progress indicator with tokens');
+        console.log('  - Has progress indicator:', !!currentProgressIndicator);
+        console.log('  - Has token info:', !!response.tokenInfo);
+        console.log('  - Token info content:', response.tokenInfo);
+        
         // For testing - simulate token display after 3 seconds if no real tokens
         if (currentProgressIndicator) {
           setTimeout(() => {
@@ -666,18 +678,19 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
     
     // Check for token information in response  
     let tokenInfo = null;
-    console.log('🔍 Checking for token data in response:', {
+    console.log('🔍 Initial /query response analysis:', {
       hasUsage: !!data.usage,
       hasTokenUsage: !!data.token_usage, 
       hasTokens: !!data.tokens,
-      dataKeys: Object.keys(data)
+      dataKeys: Object.keys(data),
+      fullData: data
     });
     
     if (data.usage || data.token_usage || data.tokens) {
       tokenInfo = data.usage || data.token_usage || data.tokens;
-      console.log('🔢 Token usage found:', tokenInfo);
+      console.log('🔢 Initial query token usage found:', tokenInfo);
     } else {
-      console.log('❌ No token information found in response');
+      console.log('❌ No token information found in initial query response');
     }
     
     // Extract AI response
@@ -727,6 +740,8 @@ async function chatWithAI(message: string, _engine: SimpleScriptLabEngine): Prom
         };
         
         console.log('🔢 Incremental building token usage:', incrementalTokenInfo);
+        console.log('🔢 Raw token usage from executor:', tokenUsage);
+        console.log('🔢 Total accumulated tokens:', tokenUsage.total_tokens);
         
         if (success) {
           aiMessage = `✅ **${modelType.toUpperCase()} Model Built Successfully!**\n\nThe model was created using incremental building with enhanced stability.\n\n**Build Process:**\n${progressMessages.slice(-5).join('\n')}\n\n🎉 Your financial model is ready for use!`;
