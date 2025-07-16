@@ -73,3 +73,23 @@ yarn-error.log*
 
 # Office temp files
 ~$*
+
+# Security - IMPORTANT! Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa*
+*.pub
+.ssh/
+secrets/
+.env.local
+.env.production
+
+# ChromaDB vector storage
+backend/chroma_db/
+
+# Traces and debugging
+backend/traces.jsonl
